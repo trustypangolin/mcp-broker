@@ -72,7 +72,9 @@ Connections that match no agent:
 A role answers three questions:
 
 1. **Which connectors can this agent see?** `connectors:` is a list of names, globs or tags
-   (`tag:office`), with `!` to exclude. Connectors not granted are invisible. They don't
+   (`tag:office`), with `!` to exclude. Selectors apply in order and the last one that
+   matches decides, so `["*", "!tag:mail"]` is everything except mail. Connectors not granted
+   are invisible. They don't
    appear in `list_connectors`, and `load_connector` reports them as unknown, not as forbidden.
 2. **What does each class of tool do?** `classes:` maps each class to an action. Missing
    classes default to `deny`.

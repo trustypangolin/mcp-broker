@@ -1,0 +1,98 @@
+// Command mcp-broker is one MCP endpoint for every agent on the host.
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+
+	"github.com/trustypangolin/mcp-broker/internal/config"
+	"github.com/trustypangolin/mcp-broker/internal/version"
+)
+
+const usage = `usage: mcp-broker <command> [flags]
+
+commands:
+  serve       run the broker (Streamable HTTP; hosted by the tray app)
+  connect     stdio shim: forward a stdio MCP client to the running broker
+  dashboard   run the dashboard only
+  validate    check config, paths and commands
+  import      seed connectors from a claude_desktop_config.json
+  ps          list owned runs
+  stop        stop a profile
+  version     print version
+
+Run 'mcp-broker <command> -h' for command flags.
+`
+
+// errUsage marks errors whose message is already a complete user-facing explanation.
+var errUsage = errors.New("usage")
+
+func main() {
+	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		if !errors.Is(err, errUsage) {
+			fmt.Fprintln(os.Stderr, "mcp-broker:", err)
+		}
+		os.Exit(1)
+	}
+}
+
+func run(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		fmt.Fprint(stderr, usage)
+		return errUsage
+	}
+	cmd, rest := args[0], args[1:]
+	switch cmd {
+	case "version", "--version", "-v":
+		fmt.Fprintln(stdout, version.String())
+		return nil
+	case "validate":
+		return cmdValidate(rest, stdout, stderr)
+	case "serve", "connect", "dashboard", "import", "ps", "stop":
+		return fmt.Errorf("%s: not implemented yet", cmd)
+	case "help", "-h", "--help":
+		fmt.Fprint(stdout, usage)
+		return nil
+	}
+	fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usage)
+	return errUsage
+}
+
+func cmdValidate(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	cfgFlag := fs.String("config", "", "config file (default $"+config.EnvConfigPath+" or the user config dir)")
+	strict := fs.Bool("strict", false, "treat warnings as errors")
+	if err := fs.Parse(args); err != nil {
+		return errUsage
+	}
+
+	path, err := config.ResolvePath(*cfgFlag)
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+
+	issues := cfg.Check()
+	errs, warns := 0, 0
+	for _, i := range issues {
+		fmt.Fprintln(stdout, i)
+		if i.Warning {
+			warns++
+		} else {
+			errs++
+		}
+	}
+	fmt.Fprintf(stdout, "%s: %d connectors, %d agents, %d roles, %d profiles; %d errors, %d warnings\n",
+		cfg.Path, len(cfg.Connectors), len(cfg.Agents), len(cfg.Roles), len(cfg.Profiles), errs, warns)
+	if errs > 0 || (*strict && warns > 0) {
+		return errUsage
+	}
+	return nil
+}
