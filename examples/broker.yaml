@@ -1,0 +1,219 @@
+# mcp-broker default config. See docs/PERMISSIONS.md for the model.
+# No secrets belong in this file: token hashes live in tokens.yaml, secret env values in env_file.
+
+server:
+  listen: 0.0.0.0:8765            # MCP at /mcp, dashboard at /ui
+  allowed_sources:                # checked before anything else; non-loopback always needs a token
+    - 127.0.0.0/8
+    - ::1/128
+    - 10.0.0.0/8
+    - 172.16.0.0/12               # includes the WSL and wslc NAT ranges
+    - 192.168.0.0/16
+    - 100.64.0.0/10               # Tailscale
+    - fc00::/7
+    - fe80::/10
+  firewall_profile: private       # tray creates the inbound rule for this profile only
+  # tls:
+  #   cert_file: broker.crt
+  #   key_file: broker.key
+
+dashboard:
+  admin_from: [127.0.0.0/8, ::1/128]   # config, agents, tokens: loopback + admin token only
+  # approvals and run status are reachable from server.allowed_sources
+
+approvals:
+  timeout: 120s                   # pending approval expires and is denied
+  notify: [tray]                  # also: ntfy
+  # ntfy:
+  #   url: https://ntfy.sh/your-topic
+
+audit:
+  path: audit.jsonl
+
+# ---------------------------------------------------------------------------
+# Agents: who is calling. The bearer token selects the agent; `match` conditions must
+# also hold or the request is refused (403). Tokens are managed from the tray.
+# ---------------------------------------------------------------------------
+agents:
+  claude-code:
+    role: owner
+    match:
+      process: ["*\\claude.exe", "*\\node.exe"]   # any process in the parent chain
+      from: [127.0.0.0/8, ::1/128]
+    approvals: [elicitation, tray, dashboard]
+
+  claude-desktop:
+    role: owner
+    match:
+      process: ["*\\AnthropicClaude\\*\\claude.exe", "*\\WindowsApps\\Claude_*\\*"]
+      from: [127.0.0.0/8, ::1/128]
+    approvals: [elicitation, tray, dashboard]
+
+  vscode:
+    role: coder
+    match:
+      process: ["*\\Code.exe", "*\\Code - Insiders.exe"]
+      from: [127.0.0.0/8, ::1/128]
+    approvals: [tray, dashboard]
+
+  wsl:
+    role: sandbox
+    match:
+      from: [172.16.0.0/12]
+    approvals: [tray, dashboard]
+
+  wslc:
+    role: sandbox
+    match:
+      from: [172.16.0.0/12]
+    approvals: [tray, dashboard]
+
+  lan:
+    role: viewer
+    match:
+      from: [10.0.0.0/8, 192.168.0.0/16, 100.64.0.0/10]
+    approvals: [dashboard]
+
+# Built in, listed for clarity: unidentified loopback connections get role `anonymous`,
+# unidentified non-loopback connections are rejected.
+
+# ---------------------------------------------------------------------------
+# Roles: what an agent may see and do.
+# Classes: read < write < destructive < external < spend < exec. Missing keys deny.
+# ---------------------------------------------------------------------------
+roles:
+  owner:
+    connectors: ["*"]
+    classes: {read: allow, write: allow, destructive: approve, external: approve, spend: approve, exec: approve}
+    profiles: {status: allow, logs: allow, plan: allow, start: approve, stop: allow, update: approve}
+
+  coder:
+    connectors: ["tag:office", "tag:browser", "tag:media"]
+    classes: {read: allow, write: allow, destructive: approve, external: deny, spend: deny, exec: approve}
+    profiles: {status: allow, logs: allow, plan: allow, start: approve, stop: allow}
+    rules:
+      - match: "browser-control/get-recent-browser-history"
+        action: approve
+
+  sandbox:
+    connectors: ["tag:office", "tag:media"]
+    classes: {read: allow, write: approve, destructive: approve, external: deny, spend: deny, exec: deny}
+    profiles: {status: allow, logs: allow}
+
+  viewer:
+    connectors: ["*", "!tag:mail"]
+    classes: {read: allow}
+    profiles: {status: allow, logs: allow}
+    rules:
+      - match: "browser-control/*"
+        action: deny
+
+  anonymous:
+    connectors: []
+
+# ---------------------------------------------------------------------------
+# Global floors: apply to every agent and can only make a decision stricter.
+# ---------------------------------------------------------------------------
+policy:
+  floors:
+    - match: "sieve/sieve_put_script"       # filters all incoming mail
+      action: approve
+    - match: "sieve/sieve_*activate*"
+      action: approve
+    - match: "imap/imap_*account*"          # credential management
+      action: approve
+    - match: "*/*digital_signature*"
+      action: approve
+    - match: "*/*protect*"
+      action: approve
+
+# ---------------------------------------------------------------------------
+# Connectors: downstream MCP servers, lazily started.
+# tool_classes overrides the name heuristic and downstream annotations.
+# ---------------------------------------------------------------------------
+connectors:
+  excel-live:
+    description: Live edit of workbooks open in Excel
+    tags: [office]
+    command: uv
+    args: [--directory, G:/Ai/MCP/excel-mcp-live, run, excel_mcp_server.py]
+    env: {MCP_AUTHOR: Benjamin Luton}
+    idle_unload: 30m
+
+  word-live:
+    description: Live edit of documents open in Word, plus .docx tools
+    tags: [office]
+    command: uv
+    args: [--directory, G:/Ai/MCP/word-mcp-live, run, --python, "3.13", word_mcp_server.py]
+    env: {MCP_AUTHOR: Benjamin Luton, MCP_AUTHOR_INITIALS: BL}
+    idle_unload: 30m
+
+  powerpoint-live:
+    description: Live edit of presentations open in PowerPoint
+    tags: [office]
+    command: uv
+    args: [--directory, G:/Ai/MCP/powerpoint-mcp-live, run, powerpoint_mcp_server.py]
+    env: {MCP_AUTHOR: Benjamin Luton, MCP_AUTHOR_INITIALS: BL}
+    idle_unload: 30m
+
+  browser-control:
+    description: Firefox tabs, history and page content
+    tags: [browser]
+    command: node
+    args: [G:\Ai\MCP\browser-control-mcp\mcp-server\dist\server.js]
+    env_file: G:\Ai\MCP\.env.browser-control   # EXTENSION_SECRET, EXTENSION_PORT
+    tool_classes:
+      get-tab-web-content: read
+      capture-tab-screenshot: read
+
+  comfy:
+    description: Local ComfyUI control, models, workflows, jobs
+    tags: [media]
+    command: G:\ComfyUI\ComfyUI\venv\cu130-cp312\Scripts\comfy-mcp.exe
+    env_file: G:\Ai\.env
+    idle_unload: 30m
+    tool_classes:
+      partner_generate: spend
+      emit_partner_workflow: spend
+      install_node: exec
+      update_comfyui: exec
+      switch_comfyui_version: exec
+      launch_comfyui: exec
+      restart_comfyui: exec
+      download_model: write
+      run_workflow: write
+      run_template: write
+
+  imap:
+    description: Mail accounts, search, read, move, send
+    tags: [mail]
+    command: node
+    args: [G:\Ai\MCP\imap-mcp-server\dist\index.js]
+    tool_classes:
+      imap_save_draft: write
+      imap_move_email: write
+      imap_check_spam: read
+
+  sieve:
+    description: Sieve mail filter scripts over ManageSieve
+    tags: [mail]
+    command: node
+    args: [G:\Ai\MCP\sieve-mcp-server\dist\index.js]
+
+  # Remote (Streamable HTTP) connectors. Header values may reference ${NAME} from env_file
+  # only, and are redacted everywhere like secret env values.
+  strapi:
+    description: Strapi CMS for the Ai-Delivery site
+    tags: [web]
+    url: https://strapi.website.homenet/mcp
+    headers: {Authorization: "Bearer ${STRAPI_MCP_TOKEN}"}
+    env_file: G:\Ai\MCP\.env.broker
+
+  mcp-tools:
+    description: Local mcp-tools server on port 27200
+    tags: [tools]
+    url: http://127.0.0.1:27200/mcp
+    headers: {Authorization: "Bearer ${MCP_TOOLS_TOKEN}"}
+    env_file: G:\Ai\MCP\.env.broker
+
+profiles: {}   # ComfyUI etc., added with the supervisor milestone
