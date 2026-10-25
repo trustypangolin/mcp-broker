@@ -1,6 +1,6 @@
 # Permissions, agents and roles
 
-Status: draft for review. The default config that implements this lives in
+Status: accepted 2026-10-26. The default config that implements this lives in
 [examples/broker.yaml](../examples/broker.yaml).
 
 ## Model in one paragraph
@@ -131,7 +131,8 @@ decision (`final = max(role decision, matching floor)`). Use them for invariants
   admin token. Approvals and run status are reachable from `allowed_sources`, so the phone works.
 - Starting a profile with `network_exposed` (or a non-loopback `--listen`) → at least `approve`.
 - `kill_foreign` (stopping a process the broker did not start) → at least `approve`.
-- Secret redaction everywhere (env values, tokens, `headers` of HTTP connectors).
+- Secret redaction everywhere (env values, tokens, `headers` of HTTP connectors). HTTP
+  connector header values are always treated as secret, whatever their name.
 - Every decision is audited, including denials and invisible-connector probes.
 
 ## 7. Approval channels and trust

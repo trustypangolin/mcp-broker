@@ -200,4 +200,20 @@ connectors:
     command: node
     args: [G:\Ai\MCP\sieve-mcp-server\dist\index.js]
 
+  # Remote (Streamable HTTP) connectors. Header values may reference ${NAME} from env_file
+  # only, and are redacted everywhere like secret env values.
+  strapi:
+    description: Strapi CMS for the Ai-Delivery site
+    tags: [web]
+    url: https://strapi.website.homenet/mcp
+    headers: {Authorization: "Bearer ${STRAPI_MCP_TOKEN}"}
+    env_file: G:\Ai\MCP\.env.broker
+
+  mcp-tools:
+    description: Local mcp-tools server on port 27200
+    tags: [tools]
+    url: http://127.0.0.1:27200/mcp
+    headers: {Authorization: "Bearer ${MCP_TOOLS_TOKEN}"}
+    env_file: G:\Ai\MCP\.env.broker
+
 profiles: {}   # ComfyUI etc., added with the supervisor milestone
