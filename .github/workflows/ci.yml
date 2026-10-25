@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - name: race
+        if: runner.os != 'Windows'
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./...
+      - name: staticcheck
+        if: runner.os == 'Linux'
+        run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+      - name: cross-build
+        if: runner.os == 'Linux'
+        run: |
+          for t in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null ./cmd/mcp-broker
+          done

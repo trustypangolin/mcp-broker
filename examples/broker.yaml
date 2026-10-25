@@ -18,7 +18,7 @@ server:
   #   key_file: broker.key
 
 dashboard:
-  admin_from: [127.0.0.0/8, ::1/128]   # config, agents, tokens: loopback + admin token only
+  admin_from: [127.0.0.0/8, "::1/128"]   # config, agents, tokens: loopback + admin token only
   # approvals and run status are reachable from server.allowed_sources
 
 approvals:
@@ -39,21 +39,21 @@ agents:
     role: owner
     match:
       process: ["*\\claude.exe", "*\\node.exe"]   # any process in the parent chain
-      from: [127.0.0.0/8, ::1/128]
+      from: [127.0.0.0/8, "::1/128"]
     approvals: [elicitation, tray, dashboard]
 
   claude-desktop:
     role: owner
     match:
       process: ["*\\AnthropicClaude\\*\\claude.exe", "*\\WindowsApps\\Claude_*\\*"]
-      from: [127.0.0.0/8, ::1/128]
+      from: [127.0.0.0/8, "::1/128"]
     approvals: [elicitation, tray, dashboard]
 
   vscode:
     role: coder
     match:
       process: ["*\\Code.exe", "*\\Code - Insiders.exe"]
-      from: [127.0.0.0/8, ::1/128]
+      from: [127.0.0.0/8, "::1/128"]
     approvals: [tray, dashboard]
 
   wsl:
