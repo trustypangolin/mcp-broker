@@ -1,0 +1,10 @@
+/dist/
+/bin/
+*.exe
+*.test
+*.out
+coverage.*
+tokens.yaml
+*.token
+audit.jsonl
+.env*
