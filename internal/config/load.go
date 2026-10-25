@@ -57,8 +57,10 @@ func Load(path string) (*Config, error) {
 func Parse(data []byte, dir string) (*Config, error) {
 	cfg := &Config{}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true) // a typo in a security setting must not be silently ignored
-	if err := dec.Decode(cfg); err != nil && !errors.Is(err, io.EOF) { // empty file: all defaults
+	// A typo in a security setting must not be silently ignored.
+	dec.KnownFields(true)
+	// An empty file decodes to io.EOF and means "all defaults".
+	if err := dec.Decode(cfg); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
 	cfg.Dir = dir
