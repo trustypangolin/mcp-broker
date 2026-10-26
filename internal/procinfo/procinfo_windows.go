@@ -16,6 +16,9 @@ var (
 
 const tcpTableOwnerPIDAll = 5
 
+// maxDepth bounds parent-chain walks; real launch chains are a handful deep.
+const maxDepth = 16
+
 // mibTCPRowOwnerPID is MIB_TCPROW_OWNER_PID.
 type mibTCPRowOwnerPID struct {
 	State      uint32

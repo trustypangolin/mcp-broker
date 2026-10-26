@@ -20,9 +20,6 @@ type Proc struct {
 	Path string // full executable path; empty if the process could not be opened
 }
 
-// maxDepth bounds parent-chain walks; real launch chains are a handful deep.
-const maxDepth = 16
-
 // ConnOwner returns the PID that owns the client end of a loopback TCP connection, given the
 // client's address (the server's RemoteAddr) and the server's address (its LocalAddr).
 func ConnOwner(client, server netip.AddrPort) (int, error) {
