@@ -10,7 +10,6 @@ server:
     - 172.16.0.0/12               # includes the WSL and wslc NAT ranges
     - 192.168.0.0/16
     - 100.64.0.0/10               # Tailscale
-    - 169.254.0.0/16              # wslc containers (host.wslc.internal is link-local)
     - fc00::/7
     - fe80::/10
   firewall_profile: private       # tray creates the inbound rule for this profile only
@@ -66,7 +65,11 @@ agents:
   wslc:
     role: sandbox
     match:
-      from: [169.254.0.0/16, 172.16.0.0/12]
+      # wslc relays host.wslc.internal through a COM surrogate on the host, so containers
+      # arrive on loopback owned by dllhost.exe. Run containers with
+      # MCP_BROKER_URL=http://host.wslc.internal:8765/mcp.
+      from: [127.0.0.0/8, "::1/128"]
+      process: ['*\System32\dllhost.exe']
     approvals: [tray, dashboard]
 
   lan:

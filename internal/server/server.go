@@ -45,6 +45,11 @@ func Handler(o Options) http.Handler {
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, &mcp.StreamableHTTPOptions{
 		SessionTimeout: time.Hour,
 		Logger:         o.Logger,
+		// The SDK's DNS-rebinding guard rejects loopback requests whose Host is not
+		// localhost, which breaks wslc (Host: host.wslc.internal arrives on loopback). The
+		// broker's own guards cover the threat: every request needs an agent token, and
+		// identify refuses anything a browser sent (an Origin header).
+		DisableLocalhostProtection: true,
 	})
 	// RequireBearerToken is the SDK's hook for binding sessions to a user: a session opened
 	// by one agent's token rejects requests carrying another's.
@@ -88,6 +93,12 @@ func (g *gate) identify(next http.Handler) http.Handler {
 		remote, local, ok := addrs(r)
 		if !ok {
 			http.Error(w, "cannot determine connection addresses", http.StatusInternalServerError)
+			return
+		}
+		if r.Header.Get("Origin") != "" {
+			// MCP clients do not send Origin; browsers always do on cross-origin requests.
+			g.refused(remote.Addr(), &identity.Error{Status: http.StatusForbidden, Detail: "browser request (Origin " + r.Header.Get("Origin") + ")"})
+			http.Error(w, "browser requests are not accepted", http.StatusForbidden)
 			return
 		}
 		token := identity.BearerToken(r.Header.Get("Authorization"))

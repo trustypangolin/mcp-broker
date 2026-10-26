@@ -3,8 +3,9 @@
 #
 #   LAN      TCP <port>, Private profile only: closed on Public networks (cafe, hotel).
 #   WSL      TCP <port> on the WSL virtual adapter, from the WSL NAT range only.
-#   wslc     TCP <port> from link-local addresses: wslc containers reach the host as
-#            host.wslc.internal, a 169.254.x.x address.
+#
+# wslc containers need no rule: host.wslc.internal is relayed by a Windows process
+# (dllhost.exe), so their connections arrive on loopback.
 #
 # Every rule still leaves the broker's own checks in place: allowed_sources, agent token,
 # and the agent's match conditions.
@@ -32,7 +33,5 @@ if ($wsl) {
 } else {
     Write-Warning "No WSL virtual adapter found; skipping the WSL rule. Re-run after starting WSL."
 }
-
-New-NetFirewallRule @common -DisplayName "mcp-broker wslc (link-local, TCP $Port)" -Profile Any -RemoteAddress 169.254.0.0/16 | Out-Null
 
 Get-NetFirewallRule -Group $group | Select-Object DisplayName, Profile, Enabled | Format-Table -AutoSize

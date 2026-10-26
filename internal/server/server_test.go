@@ -170,6 +170,38 @@ func TestRefusals(t *testing.T) {
 	}
 }
 
+func TestNonLocalhostHostAndBrowserOrigin(t *testing.T) {
+	f := newFixture(t)
+	// wslc sends Host: host.wslc.internal over loopback; that must work.
+	req, _ := http.NewRequest(http.MethodPost, f.url+"/mcp", strings.NewReader(initBody))
+	req.Host = "host.wslc.internal:8765"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Authorization", "Bearer "+f.tokens["alpha"])
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Host host.wslc.internal: %d", resp.StatusCode)
+	}
+
+	// A browser page, even holding a token, is refused.
+	req, _ = http.NewRequest(http.MethodPost, f.url+"/mcp", strings.NewReader(initBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+f.tokens["alpha"])
+	req.Header.Set("Origin", "https://evil.example")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("browser Origin: %d, want 403", resp.StatusCode)
+	}
+}
+
 func TestSessionBoundToToken(t *testing.T) {
 	f := newFixture(t)
 	resp := post(t, f.url+"/mcp", f.tokens["alpha"], "", initBody)

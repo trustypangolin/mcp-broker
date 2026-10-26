@@ -115,15 +115,23 @@ func chain(pid int) ([]Proc, error) {
 	}
 
 	var out []Proc
+	seen := map[int]bool{}
 	childStart := int64(-1)
 	for cur := pid; len(out) < maxDepth; {
 		path, start := describe(cur)
 		if childStart >= 0 && start > childStart {
 			break // PID reused: this "parent" is younger than its child
 		}
+		if path == "" && len(out) > 0 {
+			// Protected system processes (svchost, services) cannot be opened, so their
+			// start times are unknown and PID reuse cannot be ruled out; nothing above
+			// them is attributable to the caller anyway.
+			break
+		}
 		out = append(out, Proc{PID: cur, Path: path})
+		seen[cur] = true
 		next, ok := parents[cur]
-		if !ok || next == 0 || next == cur {
+		if !ok || next == 0 || seen[next] {
 			break
 		}
 		if start > 0 {
