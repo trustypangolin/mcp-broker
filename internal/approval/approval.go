@@ -38,6 +38,7 @@ type Plan struct {
 	Class     string           `json:"class,omitempty"`
 	ArgsHash  string           `json:"args_hash,omitempty"`
 	Summary   string           `json:"summary"`
+	Detail    string           `json:"detail,omitempty"` // the full plan, for profile actions
 	Reason    string           `json:"reason"`
 	Channels  []config.Channel `json:"channels"`
 	Created   time.Time        `json:"created"`

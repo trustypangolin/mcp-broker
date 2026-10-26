@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/audit"
 	"github.com/trustypangolin/mcp-broker/internal/config"
 	"github.com/trustypangolin/mcp-broker/internal/gateway"
+	"github.com/trustypangolin/mcp-broker/internal/supervisor"
 )
 
 // AdminToken reads the dashboard/admin token, creating it (owner-only) on first use. The
@@ -53,6 +56,8 @@ type Control interface {
 	Status() Status
 	// Unload stops a connector instance, reporting whether it was loaded.
 	Unload(key string) bool
+	// Supervisor runs profiles.
+	Supervisor() *supervisor.Supervisor
 }
 
 // Reloaded reports what a reload changed.
@@ -70,6 +75,7 @@ type Status struct {
 	Started    time.Time           `json:"started"`
 	Pending    int                 `json:"pending_approvals"`
 	Connectors []gateway.Connector `json:"connectors"`
+	Profiles   []supervisor.Status `json:"profiles"`
 	Agents     []string            `json:"agents"`
 }
 
@@ -92,6 +98,9 @@ func MountAdmin(mux *http.ServeMux, o AdminOptions) {
 	mux.Handle("GET /admin/status", a.guard(anyAllowed, a.status))
 	mux.Handle("POST /admin/reload", a.guard(adminOnly, a.reload))
 	mux.Handle("POST /admin/connectors/{key}/unload", a.guard(adminOnly, a.unload))
+	mux.Handle("GET /admin/profiles", a.guard(anyAllowed, a.profiles))
+	mux.Handle("GET /admin/profiles/{name}/logs", a.guard(anyAllowed, a.profileLogs))
+	mux.Handle("POST /admin/profiles/{name}/{action}", a.guard(adminOnly, a.profileAction))
 }
 
 type admin struct{ o AdminOptions }
@@ -165,4 +174,39 @@ func (a *admin) reload(w http.ResponseWriter, _ *http.Request) {
 
 func (a *admin) unload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"unloaded": a.o.Control.Unload(r.PathValue("key"))})
+}
+
+func (a *admin) profiles(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, map[string]any{"profiles": a.o.Control.Supervisor().List()})
+}
+
+func (a *admin) profileLogs(w http.ResponseWriter, r *http.Request) {
+	n := 200
+	fmt.Sscan(r.URL.Query().Get("n"), &n)
+	writeJSON(w, map[string]any{"lines": a.o.Control.Supervisor().Logs(r.PathValue("name"), min(max(n, 1), 5000))})
+}
+
+// profileAction starts, stops or updates a profile for the user (the CLI, the tray, the
+// dashboard): no approval, since the admin token is the user.
+func (a *admin) profileAction(w http.ResponseWriter, r *http.Request) {
+	st, err := ProfileAction(r.Context(), a.o.Control.Supervisor(), r.PathValue("name"), r.PathValue("action"))
+	if err != nil {
+		w.WriteHeader(http.StatusConflict)
+		writeJSON(w, map[string]any{"error": err.Error(), "status": st})
+		return
+	}
+	writeJSON(w, st)
+}
+
+// ProfileAction runs start, stop or update on behalf of the user.
+func ProfileAction(ctx context.Context, sup *supervisor.Supervisor, name, action string) (supervisor.Status, error) {
+	switch action {
+	case "start":
+		return sup.Start(name)
+	case "stop":
+		return sup.Stop(ctx, name)
+	case "update":
+		return sup.Update(name)
+	}
+	return supervisor.Status{}, fmt.Errorf("unknown action %q (want start, stop or update)", action)
 }

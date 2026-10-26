@@ -2,7 +2,11 @@ package proc
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -85,7 +89,7 @@ func (p *Process) start(opts Options) error {
 }
 
 func (p *Process) kill() {
-	killTree(p.Cmd.Process.Pid)
+	killTree(p.pid)
 	if p.os.job != 0 {
 		windows.TerminateJobObject(p.os.job, 1)
 		windows.CloseHandle(p.os.job)
@@ -133,3 +137,94 @@ func killTree(root int) {
 	}
 	walk(root, 0)
 }
+
+func (p *Process) adopt(started time.Time) bool {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(p.pid))
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	var created, exited, kernel, user windows.Filetime
+	if windows.GetProcessTimes(h, &created, &exited, &kernel, &user) != nil {
+		return false
+	}
+	d := time.Unix(0, created.Nanoseconds()).Sub(started)
+	return d > -2*time.Second && d < 2*time.Second && isAlive(p.pid)
+}
+
+func isAlive(pid int) bool {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	var code uint32
+	const stillActive = 259
+	return windows.GetExitCodeProcess(h, &code) == nil && code == stillActive
+}
+
+// envCtrlBreak asks a copy of the broker's own executable to deliver CTRL_BREAK to a
+// process group. Console control events only reach processes sharing the sender's console,
+// and every owned child has its own hidden one; a helper can attach to it without
+// disturbing the broker's console (the terminal running `serve`).
+const envCtrlBreak = "MCP_BROKER_CTRL_BREAK"
+
+var (
+	kernel32                  = windows.NewLazySystemDLL("kernel32.dll")
+	pFreeConsole              = kernel32.NewProc("FreeConsole")
+	pAttachConsole            = kernel32.NewProc("AttachConsole")
+	pSetConsoleCtrlHandler    = kernel32.NewProc("SetConsoleCtrlHandler")
+	pGenerateConsoleCtrlEvent = kernel32.NewProc("GenerateConsoleCtrlEvent")
+)
+
+// RunHelper performs a helper action and exits if this process was started as one. Every
+// binary that owns processes calls it first thing in main (and test binaries in TestMain).
+func RunHelper() {
+	v := os.Getenv(envCtrlBreak)
+	if v == "" {
+		return
+	}
+	pid, err := strconv.Atoi(v)
+	if err != nil {
+		os.Exit(2)
+	}
+	pFreeConsole.Call()
+	if r, _, _ := pAttachConsole.Call(uintptr(pid)); r == 0 {
+		os.Exit(3)
+	}
+	pSetConsoleCtrlHandler.Call(0, 1) // ignore the event ourselves
+	const ctrlBreakEvent = 1
+	if r, _, _ := pGenerateConsoleCtrlEvent.Call(ctrlBreakEvent, uintptr(pid)); r == 0 {
+		os.Exit(4)
+	}
+	os.Exit(0)
+}
+
+func (p *Process) interrupt() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(exe)
+	cmd.Env = append(os.Environ(), envCtrlBreak+"="+strconv.Itoa(p.pid))
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
+	done := make(chan error, 1)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("sending CTRL_BREAK to %d: %w", p.pid, err)
+		}
+		return nil
+	case <-time.After(5 * time.Second):
+		cmd.Process.Kill()
+		return fmt.Errorf("sending CTRL_BREAK to %d: helper timed out", p.pid)
+	}
+}
+
+// KillForeign terminates a process the broker did not start, and its descendants. Only for
+// an approved kill_foreign.
+func KillForeign(pid int) { killTree(pid) }

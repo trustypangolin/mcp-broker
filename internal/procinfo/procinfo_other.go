@@ -10,3 +10,7 @@ import "net/netip"
 func connOwner(netip.Addr, uint16, netip.Addr, uint16) (int, error) { return 0, ErrUnsupported }
 
 func chain(int) ([]Proc, error) { return nil, ErrUnsupported }
+
+func listenerPID(uint16) (int, error) { return 0, ErrUnsupported }
+
+func describe(int) (string, int64) { return "", 0 }

@@ -25,6 +25,7 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/identity"
 	"github.com/trustypangolin/mcp-broker/internal/policy"
 	"github.com/trustypangolin/mcp-broker/internal/redact"
+	"github.com/trustypangolin/mcp-broker/internal/supervisor"
 	"github.com/trustypangolin/mcp-broker/internal/version"
 )
 
@@ -37,6 +38,8 @@ type Options struct {
 	Audit     *audit.Log
 	Redactor  *redact.Redactor
 	Logger    *slog.Logger
+	// Supervisor runs profiles; nil means no profile tools work.
+	Supervisor *supervisor.Supervisor
 	// DashboardURL is shown to agents whose approval must happen out of band.
 	DashboardURL string
 	// LogDir receives one stderr log per local connector; empty disables.
@@ -255,7 +258,8 @@ func (g *Gateway) idleLoop() {
 func (g *Gateway) Server() *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "mcp-broker", Version: version.Version}, &mcp.ServerOptions{
 		Instructions: "This is mcp-broker. Call list_connectors to see what is available, load_connector to get a " +
-			"connector's tools, then call_tool to use one. Some calls need the user's approval.",
+			"connector's tools, then call_tool to use one. list_profiles and profile start, stop and inspect local apps " +
+			"such as ComfyUI. Some calls need the user's approval.",
 		Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
 		// Sessions are required (server-initiated elicitation for approvals and passthrough),
 		// and the SDK serves the 2026-07-28 protocol only statelessly, so pin the
@@ -295,6 +299,7 @@ func (g *Gateway) Server() *mcp.Server {
 		InputSchema: schema(map[string]any{"approval_id": str("Approval id")}, "approval_id"),
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, g.approvalStatus)
+	g.addProfileTools(s)
 	return s
 }
 
@@ -586,19 +591,43 @@ func (g *Gateway) truncate(res *mcp.CallToolResult) *mcp.CallToolResult {
 // approve gets a decision for an approve-class call. It returns ok=true once the call may
 // proceed; otherwise res says why not (denied, expired, or pending with an approval id).
 func (g *Gateway) approve(ctx context.Context, req *mcp.CallToolRequest, id identity.Identity, dec policy.Decision, a callArgs, argsHash string) (res *mcp.CallToolResult, ch config.Channel, ok bool) {
-	q := g.opts.Approvals
-	binding := approval.Binding{Agent: id.Agent, Connector: a.Connector, Tool: a.Tool, ArgsHash: argsHash}
+	return g.approveFor(ctx, req, id, approvalSpec{
+		plan: approval.Plan{
+			Kind: "tool.call", Agent: id.Agent, Connector: a.Connector, Tool: a.Tool, Class: string(dec.Class), ArgsHash: argsHash,
+			Summary: g.red.String(fmt.Sprintf("%s wants to call %s/%s (%s). %s", id.Agent, a.Connector, a.Tool, dec.Class, argsPreview(a.Arguments))),
+			Reason:  dec.Reason,
+		},
+		approvalID: a.ApprovalID,
+		label:      a.Connector + "/" + a.Tool,
+		retry:      "call call_tool again with the same arguments",
+	})
+}
 
-	if a.ApprovalID != "" {
-		err := q.Consume(a.ApprovalID, binding)
-		e, _ := q.Get(a.ApprovalID)
+// approvalSpec is one action waiting for a human: a tool call or a profile action.
+type approvalSpec struct {
+	plan       approval.Plan // Channels is filled in by approveFor
+	approvalID string        // from the caller, to spend an earlier approval
+	label      string        // what is being approved, for messages
+	retry      string        // how to come back once approved
+}
+
+// approveFor gets a decision for spec through the agent's channels. ok means approved and
+// the approval has been spent on this exact action; otherwise res is the answer to return.
+func (g *Gateway) approveFor(ctx context.Context, req *mcp.CallToolRequest, id identity.Identity, spec approvalSpec) (res *mcp.CallToolResult, ch config.Channel, ok bool) {
+	q := g.opts.Approvals
+	p := spec.plan
+	binding := approval.Binding{Agent: p.Agent, Connector: p.Connector, Tool: p.Tool, Profile: p.Profile, Action: p.Action, ArgsHash: p.ArgsHash}
+
+	if spec.approvalID != "" {
+		err := q.Consume(spec.approvalID, binding)
+		e, _ := q.Get(spec.approvalID)
 		switch {
 		case err == nil:
 			return nil, e.Channel, true
 		case errors.Is(err, approval.ErrNotApproved) && e.Status == approval.Pending:
-			return g.pending(e), "", false
+			return g.pending(e, spec.retry), "", false
 		default:
-			return textResult(true, "approval %s cannot be used: %v", a.ApprovalID, err), "", false
+			return textResult(true, "approval %s cannot be used: %v", spec.approvalID, err), "", false
 		}
 	}
 
@@ -607,12 +636,9 @@ func (g *Gateway) approve(ctx context.Context, req *mcp.CallToolRequest, id iden
 	if !canElicit {
 		channels = slices.DeleteFunc(slices.Clone(channels), func(c config.Channel) bool { return c == config.ChanElicitation })
 	}
-	summary := g.red.String(fmt.Sprintf("%s wants to call %s/%s (%s). %s", id.Agent, a.Connector, a.Tool, dec.Class, argsPreview(a.Arguments)))
-	e := q.Submit(approval.Plan{
-		Kind: "tool.call", Agent: id.Agent, Connector: a.Connector, Tool: a.Tool, Class: string(dec.Class),
-		ArgsHash: argsHash, Summary: summary, Reason: dec.Reason, Channels: channels,
-	})
-	g.write(audit.Event{Kind: audit.KindPlanCreated, Agent: id.Agent, Connector: a.Connector, Tool: a.Tool, PlanID: e.ID, ArgsHash: argsHash, Detail: dec.Reason})
+	p.Channels = channels
+	e := q.Submit(p)
+	g.write(audit.Event{Kind: audit.KindPlanCreated, Agent: id.Agent, Connector: p.Connector, Tool: p.Tool, Profile: p.Profile, Action: p.Action, PlanID: e.ID, ArgsHash: p.ArgsHash, Detail: p.Reason})
 	if e.Status == approval.Denied {
 		return textResult(true, "denied: %s has no approval channel", id.Agent), "", false
 	}
@@ -631,7 +657,7 @@ func (g *Gateway) approve(ctx context.Context, req *mcp.CallToolRequest, id iden
 	got, _ := q.Wait(wctx, e.ID)
 	stopKeepalive()
 
-	g.write(audit.Event{Kind: audit.KindApproval, Agent: id.Agent, Connector: a.Connector, Tool: a.Tool, PlanID: e.ID, Decision: string(got.Status), Channel: string(got.Channel)})
+	g.write(audit.Event{Kind: audit.KindApproval, Agent: id.Agent, Connector: p.Connector, Tool: p.Tool, Profile: p.Profile, Action: p.Action, PlanID: e.ID, Decision: string(got.Status), Channel: string(got.Channel)})
 	switch got.Status {
 	case approval.Approved:
 		if err := q.Consume(e.ID, binding); err != nil {
@@ -639,20 +665,20 @@ func (g *Gateway) approve(ctx context.Context, req *mcp.CallToolRequest, id iden
 		}
 		return nil, got.Channel, true
 	case approval.Pending:
-		return g.pending(got), "", false
+		return g.pending(got, spec.retry), "", false
 	default:
-		return textResult(true, "%s/%s was not approved (%s)", a.Connector, a.Tool, got.Status), got.Channel, false
+		return textResult(true, "%s was not approved (%s)", spec.label, got.Status), got.Channel, false
 	}
 }
 
-func (g *Gateway) pending(e approval.Entry) *mcp.CallToolResult {
+func (g *Gateway) pending(e approval.Entry, retry string) *mcp.CallToolResult {
 	where := "the mcp-broker tray or dashboard"
 	if g.opts.DashboardURL != "" {
 		where += " (" + g.opts.DashboardURL + ")"
 	}
 	res := textResult(false, "pending_approval: approval %s is waiting for the user in %s. It expires at %s. "+
-		"Once approved, call call_tool again with the same arguments and approval_id %q.",
-		e.ID, where, e.Expires.Local().Format(time.Kitchen), e.ID)
+		"Once approved, %s and approval_id %q.",
+		e.ID, where, e.Expires.Local().Format(time.Kitchen), retry, e.ID)
 	res.StructuredContent = map[string]any{"status": "pending_approval", "approval_id": e.ID, "expires": e.Expires}
 	return res
 }
@@ -662,7 +688,7 @@ func (g *Gateway) pending(e approval.Entry) *mcp.CallToolResult {
 func (g *Gateway) elicitApproval(ctx context.Context, ss *mcp.ServerSession, e approval.Entry) {
 	res, err := ss.Elicit(ctx, &mcp.ElicitParams{
 		Mode:    "form",
-		Message: "mcp-broker approval: " + e.Summary,
+		Message: elicitMessage(e),
 		RequestedSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -676,6 +702,14 @@ func (g *Gateway) elicitApproval(ctx context.Context, ss *mcp.ServerSession, e a
 	}
 	approve := res.Action == "accept" && res.Content["approve"] == true
 	g.opts.Approvals.Decide(e.ID, approve, config.ChanElicitation)
+}
+
+func elicitMessage(e approval.Entry) string {
+	m := "mcp-broker approval: " + e.Summary
+	if e.Detail != "" {
+		m += "\n\n" + e.Detail
+	}
+	return m
 }
 
 // keepalive sends progress while a call waits for approval, so clients that reset their

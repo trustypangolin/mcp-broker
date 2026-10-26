@@ -27,6 +27,7 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/proc"
 	"github.com/trustypangolin/mcp-broker/internal/redact"
 	"github.com/trustypangolin/mcp-broker/internal/server"
+	"github.com/trustypangolin/mcp-broker/internal/supervisor"
 	"github.com/trustypangolin/mcp-broker/internal/version"
 )
 
@@ -42,6 +43,8 @@ type Options struct {
 	Watch bool
 	// OnReload, if set, is told about every reload attempt (including the watcher's).
 	OnReload func(server.Reloaded, error)
+	// OnProfile, if set, hears about profile state changes.
+	OnProfile func(supervisor.Status)
 }
 
 // Broker is a running broker.
@@ -55,6 +58,7 @@ type Broker struct {
 	aud     *audit.Log
 	queue   *approval.Queue
 	gw      *gateway.Gateway
+	sup     *supervisor.Supervisor
 	ident   *identity.Identifier
 	dash    *dashboard.Dashboard
 	admin   string
@@ -135,9 +139,14 @@ func Start(opts Options) (b *Broker, err error) {
 	b.base = localBase(cfg, ln.Addr())
 
 	b.queue = approval.NewQueue(cfg.Approvals.Timeout)
+	b.sup = supervisor.New(supervisor.Options{
+		Config: cfg, Redactor: b.red, Audit: b.aud, Logger: b.log, LogDir: logDir,
+		StateFile: filepath.Join(cfg.Dir, "runs.json"), OnChange: opts.OnProfile,
+	})
+	cleanup = append(cleanup, b.sup.Close)
 	b.gw = gateway.New(gateway.Options{
 		Config: cfg, Approvals: b.queue, Audit: b.aud, Redactor: b.red, Logger: b.log, LogDir: logDir,
-		DashboardURL: b.base + "/ui/",
+		DashboardURL: b.base + "/ui/", Supervisor: b.sup,
 	})
 	cleanup = append(cleanup, b.gw.Close)
 	b.ident = identity.New(cfg, store)
@@ -190,6 +199,7 @@ func (b *Broker) Close() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		b.srv.Shutdown(ctx)
+		b.sup.Close() // graceful stop of every profile
 		b.gw.Close()
 		b.log.Info("stopped")
 		b.aud.Close()
@@ -233,7 +243,7 @@ func (b *Broker) Status() server.Status {
 	cfg := b.Config()
 	st := server.Status{
 		Version: version.Version, Config: cfg.Path, URL: b.base + "/mcp", Started: b.started,
-		Pending: len(b.queue.List(true)), Connectors: b.gw.Connectors(),
+		Pending: len(b.queue.List(true)), Connectors: b.gw.Connectors(), Profiles: b.sup.List(),
 	}
 	for name := range cfg.Agents {
 		st.Agents = append(st.Agents, name)
@@ -241,6 +251,9 @@ func (b *Broker) Status() server.Status {
 	slices.Sort(st.Agents)
 	return st
 }
+
+// Supervisor implements server.Control.
+func (b *Broker) Supervisor() *supervisor.Supervisor { return b.sup }
 
 // Unload implements server.Control.
 func (b *Broker) Unload(key string) bool {
@@ -301,6 +314,7 @@ func (b *Broker) reloadLocked() (server.Reloaded, error) {
 	slices.Sort(res.Restart)
 	b.cfg.Store(cfg)
 	b.ident.SetConfig(cfg)
+	b.sup.SetConfig(cfg)
 	res.Unloaded = b.gw.Reload(cfg)
 	return res, nil
 }

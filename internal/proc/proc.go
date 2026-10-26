@@ -6,11 +6,13 @@ package proc
 import (
 	"os/exec"
 	"sync"
+	"time"
 )
 
-// Process is a started, owned child.
+// Process is a started, owned child, or one adopted after a broker restart (Cmd nil).
 type Process struct {
 	Cmd *exec.Cmd
+	pid int
 	os  osProc
 
 	once sync.Once
@@ -33,14 +35,38 @@ func Start(cmd *exec.Cmd, opts Options) (*Process, error) {
 	if err := p.start(opts); err != nil {
 		return nil, err
 	}
-	liveMu.Lock()
-	live[p] = struct{}{}
-	liveMu.Unlock()
+	p.pid = cmd.Process.Pid
+	track(p)
 	return p, nil
 }
 
+func track(p *Process) {
+	liveMu.Lock()
+	live[p] = struct{}{}
+	liveMu.Unlock()
+}
+
+// Adopt takes ownership of a running process the broker started before it restarted,
+// given the start time it recorded. It reports false if pid is gone or now belongs to a
+// different process.
+func Adopt(pid int, started time.Time) (*Process, bool) {
+	p := &Process{pid: pid}
+	if !p.adopt(started) {
+		return nil, false
+	}
+	track(p)
+	return p, true
+}
+
 // PID returns the root process ID.
-func (p *Process) PID() int { return p.Cmd.Process.Pid }
+func (p *Process) PID() int { return p.pid }
+
+// Alive reports whether the root process is still running.
+func (p *Process) Alive() bool { return isAlive(p.pid) }
+
+// Interrupt asks the tree to shut down: CTRL_BREAK to its process group on Windows,
+// SIGTERM to the group elsewhere. Follow it with Kill after a timeout.
+func (p *Process) Interrupt() error { return p.interrupt() }
 
 // Kill terminates the whole tree. It is safe to call more than once and after exit.
 func (p *Process) Kill() {

@@ -166,3 +166,29 @@ func describe(pid int) (string, int64) {
 	}
 	return path, created.Nanoseconds() / 100
 }
+
+const tcpStateListen = 2
+
+func listenerPID(p uint16) (int, error) {
+	for _, family := range []uint32{windows.AF_INET, windows.AF_INET6} {
+		buf, err := tcpTable(family)
+		if err != nil {
+			return 0, err
+		}
+		n := binary.LittleEndian.Uint32(buf)
+		if family == windows.AF_INET {
+			for _, r := range unsafe.Slice((*mibTCPRowOwnerPID)(unsafe.Pointer(&buf[4])), n) {
+				if r.State == tcpStateListen && port(r.LocalPort) == p {
+					return int(r.OwningPID), nil
+				}
+			}
+			continue
+		}
+		for _, r := range unsafe.Slice((*mibTCP6RowOwnerPID)(unsafe.Pointer(&buf[4])), n) {
+			if r.State == tcpStateListen && port(r.LocalPort) == p {
+				return int(r.OwningPID), nil
+			}
+		}
+	}
+	return 0, ErrNotFound
+}

@@ -11,10 +11,12 @@ import (
 	"os"
 
 	"github.com/trustypangolin/mcp-broker/internal/config"
+	"github.com/trustypangolin/mcp-broker/internal/proc"
 	"github.com/trustypangolin/mcp-broker/internal/tray"
 )
 
 func main() {
+	proc.RunHelper() // before anything else: it may be a CTRL_BREAK helper, not the tray
 	cfgFlag := flag.String("config", "", "config file (default $"+config.EnvConfigPath+" or the user config dir)")
 	flag.Parse()
 	path, err := config.ResolvePath(*cfgFlag)

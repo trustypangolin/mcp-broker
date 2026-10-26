@@ -240,6 +240,9 @@ func (c *Config) Check() []Issue {
 			continue
 		}
 		checkCommand(p, r.Command, r.Cwd, issue)
+		if pr.Detach {
+			issue(true, p+".detach", "not supported yet: the run still stops when the broker exits")
+		}
 	}
 
 	used := map[string]bool{}

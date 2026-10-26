@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/trustypangolin/mcp-broker/internal/config"
+	"github.com/trustypangolin/mcp-broker/internal/proc"
 	"github.com/trustypangolin/mcp-broker/internal/version"
 )
 
@@ -25,8 +26,9 @@ commands:
   reload      re-read the config on the running broker
   status      show the running broker and its connectors
   import      add connectors from Claude Desktop, Claude Code and VS Code configs
-  ps          list owned runs
-  stop        stop a profile
+  ps          list profiles and their state
+  start       start a profile (stop, update likewise)
+  logs        show a profile's recent output
   version     print version
 
 Run 'mcp-broker <command> -h' for command flags.
@@ -36,6 +38,7 @@ Run 'mcp-broker <command> -h' for command flags.
 var errUsage = errors.New("usage")
 
 func main() {
+	proc.RunHelper()
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		if !errors.Is(err, errUsage) {
 			fmt.Fprintln(os.Stderr, "mcp-broker:", err)
@@ -74,8 +77,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdDashboard(rest, stdout, stderr)
 	case "import":
 		return cmdImport(rest, stdout, stderr)
-	case "ps", "stop":
-		return fmt.Errorf("%s: not implemented yet", cmd)
+	case "ps":
+		return cmdPs(rest, stdout, stderr)
+	case "start", "stop", "update":
+		return cmdProfileAction(cmd, rest, stdout, stderr)
+	case "logs":
+		return cmdLogs(rest, stdout, stderr)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return nil
