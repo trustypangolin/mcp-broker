@@ -349,3 +349,22 @@ func TestAdoptAfterRestart(t *testing.T) {
 	// The first supervisor sees its run end too; it did not ask for the stop.
 	f.waitState(Exited, 10*time.Second)
 }
+
+func TestProfilesSharingAPortAreExclusive(t *testing.T) {
+	f := newFixture(t, "server", "")
+	cfg := f.sup.cfg.Load()
+	other := cfg.Profiles["app"]
+	other.Env = map[string]string{"SUP_APP": "sleep"} // never binds the port: still loading
+	cfg.Profiles["other"] = other
+	if _, err := f.sup.Start("other"); err != nil {
+		t.Fatal(err)
+	}
+	defer f.sup.Stop(context.Background(), "other")
+	pl, _ := f.sup.Plan("app", "start")
+	if len(pl.Blocking) == 0 || !strings.Contains(pl.Blocking[0], "profile other") || pl.ForeignPID != 0 {
+		t.Fatalf("plan: %+v", pl.Blocking)
+	}
+	if _, err := f.sup.Start("app"); err == nil {
+		t.Fatal("started a second profile on the same port")
+	}
+}
