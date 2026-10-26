@@ -18,6 +18,7 @@ commands:
   serve       run the broker (Streamable HTTP; hosted by the tray app)
   connect     stdio shim: forward a stdio MCP client to the running broker
   dashboard   open the dashboard in a browser, signed in
+  init        create a starter config
   validate    check config, paths and commands
   token       create, list and revoke agent tokens
   approvals   list, approve or deny pending approvals on the running broker
@@ -53,6 +54,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	case "version", "--version", "-v":
 		fmt.Fprintln(stdout, version.String())
 		return nil
+	case "init":
+		return cmdInit(rest, stdout, stderr)
 	case "validate":
 		return cmdValidate(rest, stdout, stderr)
 	case "token":

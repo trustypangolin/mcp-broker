@@ -48,7 +48,6 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	tags := map[string]bool{}
 	for name, cn := range c.Connectors {
 		p := "connectors." + name
 		if !nameRE.MatchString(name) || name == "profile" {
@@ -83,9 +82,6 @@ func (c *Config) Validate() error {
 			if !strings.Contains(v, "${") {
 				add("%s.headers.%s: header values are secret; reference ${NAME} from env_file", p, k)
 			}
-		}
-		for _, t := range cn.Tags {
-			tags[t] = true
 		}
 	}
 
@@ -126,15 +122,9 @@ func (c *Config) Validate() error {
 			switch {
 			case s == "":
 				add("%s.connectors: empty selector", p)
-			case strings.HasPrefix(s, "tag:"):
-				if !tags[strings.TrimPrefix(s, "tag:")] {
-					add("%s.connectors: no connector has %s", p, s)
-				}
-			case !strings.ContainsAny(s, "*?"):
-				if _, ok := c.Connectors[s]; !ok {
-					add("%s.connectors: unknown connector %q", p, s)
-				}
 			}
+			// Selectors naming nothing are reported by Check, not here: removing the last
+			// connector with a tag must not make the whole config invalid.
 		}
 		for k := range r.Classes {
 			if Class(k).Rank() == len(Classes) {
@@ -259,6 +249,24 @@ func (c *Config) Check() []Issue {
 	for _, name := range sortedKeys(c.Roles) {
 		if !used[name] && name != AnonymousRole {
 			issue(true, "roles."+name, "no agent uses this role")
+		}
+	}
+	tags := map[string]bool{}
+	for _, cn := range c.Connectors {
+		for _, t := range cn.Tags {
+			tags[strings.ToLower(t)] = true
+		}
+	}
+	for _, name := range sortedKeys(c.Roles) {
+		for _, sel := range c.Roles[name].Connectors {
+			s := strings.TrimPrefix(sel, "!")
+			if t, ok := strings.CutPrefix(s, "tag:"); ok && !tags[strings.ToLower(t)] {
+				issue(true, "roles."+name+".connectors", "no connector has %s", s)
+			} else if !ok && s != "" && !strings.ContainsAny(s, "*?") {
+				if _, ok := c.Connectors[s]; !ok {
+					issue(true, "roles."+name+".connectors", "unknown connector %q", s)
+				}
+			}
 		}
 	}
 	for _, name := range sortedKeys(c.Connectors) {

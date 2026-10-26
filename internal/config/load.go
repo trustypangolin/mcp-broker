@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -160,4 +161,24 @@ func (c *Config) abs(p string) string {
 		return p
 	}
 	return filepath.Join(c.Dir, p)
+}
+
+//go:embed starter.yaml
+var starter []byte
+
+// WriteStarter creates a first-run config at path (agents and roles, no connectors). It
+// refuses to overwrite an existing file.
+func WriteStarter(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(starter); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }

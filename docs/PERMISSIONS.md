@@ -148,7 +148,7 @@ lists the channels its approvals may use:
 | Channel | Who answers |
 |---|---|
 | `elicitation` | The calling client's UI. Only trusted for interactive host apps. |
-| `tray` | Windows toast from the tray app with Approve / Deny |
+| `tray` | Notification from the tray app; clicking it (or the icon) asks Approve / Deny |
 | `dashboard` | `/ui/approvals`, including from the phone |
 | `ntfy` | Push notification linking to the dashboard |
 
