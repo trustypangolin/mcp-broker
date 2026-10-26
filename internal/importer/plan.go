@@ -55,7 +55,12 @@ func connectorName(s string) string {
 
 // isShim reports whether a server entry is the broker's own shim.
 func isShim(s Server) bool {
-	exe := strings.ToLower(filepath.Base(s.Command))
+	// Split on both separators: a config read on Linux may name a Windows path.
+	cmd := s.Command
+	if i := strings.LastIndexAny(cmd, `/\`); i >= 0 {
+		cmd = cmd[i+1:]
+	}
+	exe := strings.ToLower(cmd)
 	return strings.HasPrefix(exe, "mcp-broker") && slices.Contains(s.Args, "connect")
 }
 
