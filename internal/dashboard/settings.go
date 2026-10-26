@@ -25,60 +25,12 @@ import (
 // the raw editor still does; the forms keep names usable in URLs and file names.
 var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
 
-// connectorForm is a connector as the form edits it and as it is written to broker.yaml.
-type connectorForm struct {
-	Description string            `json:"description" yaml:"description,omitempty"`
-	Tags        []string          `json:"tags" yaml:"tags,omitempty,flow"`
-	Command     string            `json:"command" yaml:"command,omitempty"`
-	Args        []string          `json:"args" yaml:"args,omitempty"`
-	Cwd         string            `json:"cwd" yaml:"cwd,omitempty"`
-	Env         map[string]string `json:"env" yaml:"env,omitempty"`
-	EnvFile     string            `json:"env_file" yaml:"env_file,omitempty"`
-	URL         string            `json:"url" yaml:"url,omitempty"`
-	Headers     map[string]string `json:"headers" yaml:"headers,omitempty"`
-	IdleUnload  string            `json:"idle_unload" yaml:"idle_unload,omitempty"`
-	Instance    string            `json:"instance" yaml:"instance,omitempty"`
-	ToolClasses map[string]string `json:"tool_classes" yaml:"tool_classes,omitempty"`
-}
-
-// fmtDur prints a duration the way people write it in YAML: 30m, not 30m0s.
-func fmtDur(d time.Duration) string {
-	if d == 0 {
-		return ""
-	}
-	s := d.String()
-	if strings.HasSuffix(s, "m0s") {
-		s = strings.TrimSuffix(s, "0s")
-	}
-	if strings.HasSuffix(s, "h0m") {
-		s = strings.TrimSuffix(s, "0m")
-	}
-	return s
-}
-
-func formOf(c config.Connector) connectorForm {
-	f := connectorForm{
-		Description: c.Description, Tags: c.Tags, Command: c.Command, Args: c.Args, Cwd: c.Cwd,
-		Env: c.Env, EnvFile: c.EnvFile, URL: c.URL, Headers: c.Headers, IdleUnload: fmtDur(c.IdleUnload),
-	}
-	if c.Instance != "shared" {
-		f.Instance = c.Instance
-	}
-	if len(c.ToolClasses) > 0 {
-		f.ToolClasses = map[string]string{}
-		for k, v := range c.ToolClasses {
-			f.ToolClasses[k] = string(v)
-		}
-	}
-	return f
-}
-
 type connectorView struct {
-	Name      string              `json:"name"`
-	Def       connectorForm       `json:"def"`
-	Instances []gateway.Connector `json:"instances"`
-	VisibleTo []string            `json:"visible_to"`
-	Issues    []string            `json:"issues,omitempty"`
+	Name      string                `json:"name"`
+	Def       config.ConnectorEntry `json:"def"`
+	Instances []gateway.Connector   `json:"instances"`
+	VisibleTo []string              `json:"visible_to"`
+	Issues    []string              `json:"issues,omitempty"`
 }
 
 func (d *Dashboard) listConnectors(w http.ResponseWriter, _ *http.Request) {
@@ -94,7 +46,7 @@ func (d *Dashboard) listConnectors(w http.ResponseWriter, _ *http.Request) {
 	}
 	out := []connectorView{}
 	for _, name := range slices.Sorted(maps.Keys(cfg.Connectors)) {
-		v := connectorView{Name: name, Def: formOf(cfg.Connectors[name]), Instances: []gateway.Connector{}, VisibleTo: []string{}, Issues: issues[name]}
+		v := connectorView{Name: name, Def: cfg.Connectors[name].Entry(), Instances: []gateway.Connector{}, VisibleTo: []string{}, Issues: issues[name]}
 		for _, c := range st.Connectors {
 			if c.Name == name {
 				v.Instances = append(v.Instances, c)
@@ -149,7 +101,7 @@ func (d *Dashboard) putConnector(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "names are letters, digits, '.', '_' and '-'")
 		return
 	}
-	var f connectorForm
+	var f config.ConnectorEntry
 	if err := decode(r, &f); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad body: "+err.Error())
 		return

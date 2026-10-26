@@ -41,6 +41,12 @@ Private-network and WSL firewall rules, then listens on all interfaces), **Start
 Windows**, reload, restart and the log folders. Edits to `broker.yaml` in any editor apply
 on save.
 
+Already have servers set up in Claude Desktop, Claude Code or VS Code? `mcp-broker import`
+shows what it would bring over (secrets go to `secrets\<name>.env`, never `broker.yaml`;
+`npx mcp-remote` bridges become direct HTTP connectors). Add `--apply` to import, and
+`--switch` to also point those clients at the broker (each original is kept as
+`.bak-<time>`; for Claude Code it prints the `claude mcp` commands instead).
+
 Without the tray: `mcp-broker init`, `mcp-broker token create <agent> --save`,
 `mcp-broker serve`, and `mcp-broker dashboard` to open the settings.
 
@@ -55,6 +61,7 @@ Without the tray: `mcp-broker init`, `mcp-broker token create <agent> --save`,
 | `mcp-broker reload` | re-read the config now |
 | `mcp-broker approvals [approve\|deny ID]` | list or decide pending approvals |
 | `mcp-broker token create\|list\|revoke` | agent tokens |
+| `mcp-broker import [--apply] [--switch]` | bring servers over from client configs |
 | `mcp-broker init` / `validate` | create a starter config / check one |
 
 ## Building

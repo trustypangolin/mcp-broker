@@ -24,7 +24,7 @@ commands:
   approvals   list, approve or deny pending approvals on the running broker
   reload      re-read the config on the running broker
   status      show the running broker and its connectors
-  import      seed connectors from a claude_desktop_config.json
+  import      add connectors from Claude Desktop, Claude Code and VS Code configs
   ps          list owned runs
   stop        stop a profile
   version     print version
@@ -72,7 +72,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdStatus(rest, stdout, stderr)
 	case "dashboard":
 		return cmdDashboard(rest, stdout, stderr)
-	case "import", "ps", "stop":
+	case "import":
+		return cmdImport(rest, stdout, stderr)
+	case "ps", "stop":
 		return fmt.Errorf("%s: not implemented yet", cmd)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
