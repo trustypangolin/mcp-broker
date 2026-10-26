@@ -55,6 +55,7 @@ Keep this list short and the descriptions tight. This is the whole initial conte
 | `call_tool(connector, tool, args)` | Policy check, then forward the call and return the result verbatim. |
 | `unload_connector(name)` | Stop the server and drop its cached schemas. |
 | `list_profiles` | Named app profiles, description, current state. |
+| `profile(name, action)` | As built: `plan`, `start`, `status`, `logs`, `stop` and `update` below are actions of this one tool, to keep the initial tool list short. |
 | `plan(profile, action)` | Return the resolved plan for `start`, `update` or `stop` without doing anything. |
 | `start(profile)` | Create a plan, get approval if policy requires it, spawn, return immediately with a run id and state `starting`. |
 | `status(profile)` | State (`stopped`, `starting`, `ready`, `unhealthy`, `exited`), PID, uptime, ports, last health result, exit code. |

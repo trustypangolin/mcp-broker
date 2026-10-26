@@ -65,3 +65,18 @@ func TestConnOwnerNotFound(t *testing.T) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestListenerPID(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	pid, err := ListenerPID(ln.Addr().(*net.TCPAddr).Port)
+	if err != nil || pid != os.Getpid() {
+		t.Fatalf("got %d, %v; want %d", pid, err, os.Getpid())
+	}
+	if Path(pid) == "" {
+		t.Fatal("no path for own pid")
+	}
+}

@@ -19,12 +19,15 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/config"
 	"github.com/trustypangolin/mcp-broker/internal/identity"
 	"github.com/trustypangolin/mcp-broker/internal/policy"
+	"github.com/trustypangolin/mcp-broker/internal/proc"
 	"github.com/trustypangolin/mcp-broker/internal/redact"
+	"github.com/trustypangolin/mcp-broker/internal/supervisor"
 	"github.com/trustypangolin/mcp-broker/internal/testutil/alive"
 	"github.com/trustypangolin/mcp-broker/internal/testutil/fakemcp"
 )
 
 func TestMain(m *testing.M) {
+	proc.RunHelper()
 	fakemcp.MaybeRun()
 	os.Exit(m.Run())
 }
@@ -60,6 +63,7 @@ type harness struct {
 
 	progress atomic.Int32
 	session  *mcp.ClientSession
+	sup      *supervisor.Supervisor
 }
 
 func newHarness(t *testing.T, mode string, tweak func(*config.Config)) *harness {
@@ -85,8 +89,12 @@ func newHarness(t *testing.T, mode string, tweak func(*config.Config)) *harness 
 		t.Fatal(err)
 	}
 	h.q = approval.NewQueue(time.Minute)
+	if len(cfg.Profiles) > 0 {
+		h.sup = supervisor.New(supervisor.Options{Config: cfg, Redactor: red, Audit: aud, LogDir: dir})
+	}
 	h.gw = New(Options{
-		Config: cfg, Policy: policy.New(cfg), Approvals: h.q, Audit: aud, Redactor: red,
+		Supervisor: h.sup,
+		Config:     cfg, Policy: policy.New(cfg), Approvals: h.q, Audit: aud, Redactor: red,
 		LogDir:       filepath.Join(dir, "logs"),
 		ApprovalWait: 300 * time.Millisecond,
 		Identity: func(*mcp.CallToolRequest) identity.Identity {
@@ -115,6 +123,9 @@ func newHarness(t *testing.T, mode string, tweak func(*config.Config)) *harness 
 	}
 	t.Cleanup(func() {
 		h.session.Close()
+		if h.sup != nil {
+			h.sup.Close()
+		}
 		h.gw.Close()
 		aud.Close()
 	})
@@ -160,7 +171,7 @@ func TestInitialToolListIsMetaToolsOnly(t *testing.T) {
 	for _, tl := range res.Tools {
 		names = append(names, tl.Name)
 	}
-	if got := strings.Join(names, ","); got != "approval_status,call_tool,list_connectors,load_connector,unload_connector" {
+	if got := strings.Join(names, ","); got != "approval_status,call_tool,list_connectors,list_profiles,load_connector,profile,unload_connector" {
 		t.Errorf("tools = %s", got)
 	}
 }

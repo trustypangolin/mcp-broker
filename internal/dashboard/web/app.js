@@ -102,6 +102,8 @@ function dialog(title, body, actions) {
 // ---- state and routing ----
 
 let me = { admin: false };
+const publicPages = ["approvals", "profiles"];
+let pageTimer; // a page's refresh loop, cleared on navigation
 const pages = {};
 
 async function refreshStatus() {
@@ -119,11 +121,12 @@ async function refreshStatus() {
 
 function route() {
   let page = location.hash.slice(1) || "approvals";
-  if (!pages[page] || (page !== "approvals" && !me.admin)) page = "approvals";
+  if (!pages[page] || (!publicPages.includes(page) && !me.admin)) page = "approvals";
   for (const a of document.querySelectorAll("nav a")) a.classList.toggle("active", a.dataset.page === page);
   const main = $("#page");
   fill(main, h("p", { class: "muted" }, "Loading…"));
   current = page;
+  clearInterval(pageTimer);
   pages[page](main).catch((e) => fill(main, h("p", { class: "error" }, e.message)));
 }
 let current = "";
@@ -165,6 +168,76 @@ async function decide(btn, id, approve) {
   });
   refreshStatus();
   if (current === "approvals") route();
+}
+
+// ---- profiles ----
+
+const stateClass = { ready: "allow", starting: "approve", updating: "approve", stopping: "approve", unhealthy: "deny", exited: "deny" };
+
+pages.profiles = async (main) => {
+  const render = async () => {
+    const data = await api("GET", "profiles");
+    const cards = data.profiles.map((p) => h("div", { class: "card" },
+      h("h3", {}, p.profile, h("span", { class: "pill " + (stateClass[p.state] || "") }, p.state), p.adopted && h("span", { class: "pill" }, "adopted")),
+      p.description && h("div", {}, p.description),
+      h("div", { class: "muted" },
+        p.pid ? "pid " + p.pid + " · " : "", p.uptime ? "up " + p.uptime + " · " : "",
+        p.ports && p.ports.length ? "ports " + p.ports.join(", ") : "",
+        p.exit_code !== undefined && p.exit_code !== null ? " · exit code " + p.exit_code : ""),
+      p.health && h("div", { class: "hint" }, p.health),
+      p.error && h("div", { class: "bad" }, p.error),
+      h("div", { class: "row", style: "margin-top:8px" },
+        data.admin && ["starting", "ready", "unhealthy"].includes(p.state)
+          ? h("button", { class: "danger", onclick: (ev) => profileAction(ev.target, p.profile, "stop") }, "Stop")
+          : data.admin && h("button", { class: "primary", disabled: p.state === "updating" || p.state === "stopping", onclick: () => showPlan(p.profile, "start") }, "Start…"),
+        data.admin && h("button", { disabled: p.state !== "stopped" && p.state !== "exited", onclick: () => showPlan(p.profile, "update") }, "Update…"),
+        h("button", { onclick: () => showLogs(p.profile) }, "Logs"))));
+    fill(main,
+      h("h2", {}, "Profiles"),
+      h("p", { class: "muted" }, "Long-running apps the broker starts, health-checks and always stops, child processes included. Agents use them through the profile tool, with approval where their role says so."),
+      cards.length ? cards : h("div", { class: "card empty" }, "No profiles configured. Add them under profiles: in the Config tab."));
+  };
+  await render();
+  pageTimer = setInterval(() => current === "profiles" && !document.querySelector("dialog") && render().catch(() => {}), 3000);
+};
+
+async function profileAction(btn, name, action) {
+  await run(btn, async () => {
+    const st = await api("POST", "profiles/" + encodeURIComponent(name) + "/" + action);
+    toast(name + ": " + st.state);
+    route();
+  });
+}
+
+async function showPlan(name, action) {
+  const data = await api("GET", "profiles/" + encodeURIComponent(name) + "/plan?for=" + action);
+  const blocked = (data.plan.blocking || []).length > 0;
+  dialog((action === "start" ? "Start " : "Update ") + name,
+    h("div", {}, h("pre", {}, data.text), data.plan.network_exposed && h("p", { class: "warn" }, "This listens beyond this PC.")),
+    (close) => [
+      h("button", { onclick: close }, "Cancel"),
+      h("button", { class: "primary", disabled: blocked, onclick: (ev) => run(ev.target, async () => {
+        const st = await api("POST", "profiles/" + encodeURIComponent(name) + "/" + action);
+        toast(name + ": " + st.state);
+        close();
+        route();
+      }) }, action === "start" ? "Start" : "Run update"),
+    ]);
+}
+
+function showLogs(name) {
+  const pre = h("pre", { style: "max-height:60vh;overflow:auto" }, "Loading…");
+  let timer;
+  const load = async () => {
+    const data = await api("GET", "profiles/" + encodeURIComponent(name) + "/logs?n=500");
+    const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+    pre.textContent = data.lines.length ? data.lines.join("\n") : "(no output)";
+    if (atBottom) pre.scrollTop = pre.scrollHeight;
+  };
+  const d = dialog("Logs: " + name, pre, (close) => [h("button", { class: "primary", onclick: close }, "Close")]);
+  d.addEventListener("close", () => clearInterval(timer));
+  load().then(() => (pre.scrollTop = pre.scrollHeight));
+  timer = setInterval(() => load().catch(() => {}), 2000);
 }
 
 // ---- connectors ----

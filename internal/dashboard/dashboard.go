@@ -199,6 +199,11 @@ func (d *Dashboard) Mount(mux *http.ServeMux) {
 	mux.Handle("GET /ui/api/approvals", d.api(viewer, d.listApprovals))
 	mux.Handle("POST /ui/api/approvals/{id}", d.api(viewer, d.decide))
 
+	mux.Handle("GET /ui/api/profiles", d.api(viewer, d.listProfiles))
+	mux.Handle("GET /ui/api/profiles/{name}/logs", d.api(viewer, d.profileLogs))
+	mux.Handle("GET /ui/api/profiles/{name}/plan", d.api(admin, d.profilePlan))
+	mux.Handle("POST /ui/api/profiles/{name}/{action}", d.api(admin, d.profileAction))
+
 	mux.Handle("POST /ui/api/reload", d.api(admin, d.reload))
 	mux.Handle("GET /ui/api/connectors", d.api(admin, d.listConnectors))
 	mux.Handle("PUT /ui/api/connectors/{name}", d.api(admin, d.putConnector))

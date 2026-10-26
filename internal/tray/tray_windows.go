@@ -1,6 +1,7 @@
 package tray
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/config"
 	"github.com/trustypangolin/mcp-broker/internal/proc"
 	"github.com/trustypangolin/mcp-broker/internal/server"
+	"github.com/trustypangolin/mcp-broker/internal/supervisor"
 	"github.com/trustypangolin/mcp-broker/internal/version"
 	"github.com/trustypangolin/mcp-broker/scripts"
 )
@@ -48,7 +50,9 @@ const (
 	cmdLoopbackOnly
 	cmdAutostart
 	cmdQuit
+	cmdProfiles
 	cmdApprovalBase = 1000
+	cmdProfileBase  = 2000
 )
 
 type app struct {
@@ -279,7 +283,7 @@ func (a *app) notify(kind uint32, head, body string, onClick func()) {
 // ---- broker lifecycle ----
 
 func (a *app) start() {
-	b, err := broker.Start(broker.Options{ConfigPath: a.cfgPath, Watch: true, OnReload: a.reloaded})
+	b, err := broker.Start(broker.Options{ConfigPath: a.cfgPath, Watch: true, OnReload: a.reloaded, OnProfile: a.profileChanged})
 	a.mu.Lock()
 	a.b, a.startErr = b, err
 	a.mu.Unlock()
@@ -333,6 +337,26 @@ func (a *app) reloaded(res server.Reloaded, err error) {
 		a.notify(niifError, "Config not applied", err.Error()+"\nThe previous config is still in force.", func() { a.openDashboard("config") })
 	case len(res.Restart) > 0:
 		a.notify(niifInfo, "Restart needed", "Saved. "+strings.Join(res.Restart, ", ")+" take effect after a restart. Click to restart the broker now.", func() { a.restart() })
+	}
+}
+
+func (a *app) profileChanged(st supervisor.Status) {
+	open := func() { a.openDashboard("profiles") }
+	switch st.State {
+	case supervisor.Ready:
+		a.notify(niifInfo|niifNoSound, st.Profile+" is ready", st.Health, open)
+	case supervisor.Unhealthy:
+		msg := st.Health
+		if st.Error != "" {
+			msg = st.Error
+		}
+		a.notify(niifWarning, st.Profile+" is unhealthy", msg, open)
+	case supervisor.Exited:
+		code := "?"
+		if st.ExitCode != nil {
+			code = fmt.Sprint(*st.ExitCode)
+		}
+		a.notify(niifWarning, st.Profile+" exited", "Exit code "+code+". Click for its logs.", open)
 	}
 }
 
@@ -459,6 +483,27 @@ func (a *app) showMenu() {
 		m.sub(fmt.Sprintf("Approvals waiting (%d)", len(pending)), s, 0)
 		m.sep()
 	}
+	var profiles []supervisor.Status
+	if running {
+		profiles = b.Supervisor().List()
+	}
+	if len(profiles) > 0 {
+		s := newMenu()
+		for i, p := range profiles {
+			verb := "Start"
+			if p.State == supervisor.Starting || p.State == supervisor.Ready || p.State == supervisor.Unhealthy {
+				verb = "Stop"
+			}
+			flags := uint32(0)
+			if p.State == supervisor.Stopping || p.State == supervisor.Updating {
+				flags = mfGrayed
+			}
+			s.add(cmdProfileBase+i, menuText(fmt.Sprintf("%s %s (%s)", verb, p.Profile, p.State)), flags)
+		}
+		s.sep()
+		s.add(cmdProfiles, "Show profiles…", 0)
+		m.sub("Pro&files", s, 0)
+	}
 	dis := uint32(0)
 	if !running {
 		dis = mfGrayed
@@ -507,11 +552,15 @@ func (a *app) showMenu() {
 	pSetForegroundWindow.Call(uintptr(a.hwnd))
 	r, _, _ := pTrackPopupMenu.Call(uintptr(m), tpmReturnCmd|tpmRightButton|tpmBottomAlign, uintptr(pt.X), uintptr(pt.Y), 0, uintptr(a.hwnd), 0)
 	postMessage(a.hwnd, wmNull, 0, 0)
-	a.command(int(r), b, pending)
+	a.command(int(r), b, pending, profiles)
 }
 
-func (a *app) command(id int, b *broker.Broker, pending []approval.Entry) {
+func (a *app) command(id int, b *broker.Broker, pending []approval.Entry, profiles []supervisor.Status) {
 	switch {
+	case id >= cmdProfileBase && id-cmdProfileBase < len(profiles):
+		go a.toggleProfile(b, profiles[id-cmdProfileBase])
+	case id == cmdProfiles:
+		go a.openDashboard("profiles")
 	case id >= cmdApprovalBase && id-cmdApprovalBase < len(pending):
 		go a.decide(b, pending[id-cmdApprovalBase].ID)
 	case id == cmdDashboard:
@@ -550,6 +599,32 @@ func (a *app) command(id int, b *broker.Broker, pending []approval.Entry) {
 		}
 	case id == cmdQuit:
 		postMessage(a.hwnd, wmClose, 0, 0)
+	}
+}
+
+// toggleProfile starts (after showing its plan) or stops a profile for the user.
+func (a *app) toggleProfile(b *broker.Broker, p supervisor.Status) {
+	sup := b.Supervisor()
+	if p.State == supervisor.Starting || p.State == supervisor.Ready || p.State == supervisor.Unhealthy {
+		if _, err := sup.Stop(context.Background(), p.Profile); err != nil {
+			messageBox(title, "Stopping "+p.Profile+": "+err.Error(), mbOK|mbIconWarning)
+		}
+		return
+	}
+	pl, err := sup.Plan(p.Profile, "start")
+	if err != nil {
+		messageBox(title, err.Error(), mbOK|mbIconError)
+		return
+	}
+	if len(pl.Blocking) > 0 {
+		messageBox(title, "Cannot start "+p.Profile+":\n\n"+pl.Text(), mbOK|mbIconWarning)
+		return
+	}
+	if messageBox(title+": start "+p.Profile, pl.Text()+"\nStart it?", mbYesNo|mbIconQuestion) != idYes {
+		return
+	}
+	if _, err := sup.Start(p.Profile); err != nil {
+		messageBox(title, "Starting "+p.Profile+": "+err.Error(), mbOK|mbIconError)
 	}
 }
 

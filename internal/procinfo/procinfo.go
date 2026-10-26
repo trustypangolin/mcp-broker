@@ -31,3 +31,13 @@ func ConnOwner(client, server netip.AddrPort) (int, error) {
 func Chain(pid int) ([]Proc, error) {
 	return chain(pid)
 }
+
+// ListenerPID returns the PID listening on a local TCP port (any address), so a profile
+// can say who is holding the port it needs.
+func ListenerPID(port int) (int, error) { return listenerPID(uint16(port)) }
+
+// Path returns a process's executable path, or "" if it cannot be read.
+func Path(pid int) string {
+	p, _ := describe(pid)
+	return p
+}

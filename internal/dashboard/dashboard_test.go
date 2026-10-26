@@ -19,6 +19,7 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/config"
 	"github.com/trustypangolin/mcp-broker/internal/identity"
 	"github.com/trustypangolin/mcp-broker/internal/server"
+	"github.com/trustypangolin/mcp-broker/internal/supervisor"
 )
 
 const base = `# my broker
@@ -39,6 +40,7 @@ type backend struct {
 	q       *approval.Queue
 	tokens  *identity.Store
 	reloads int
+	sup     *supervisor.Supervisor
 }
 
 func (b *backend) Config() *config.Config { b.mu.Lock(); defer b.mu.Unlock(); return b.cfg }
@@ -59,6 +61,14 @@ func (b *backend) Approvals() *approval.Queue { return b.q }
 func (b *backend) Tokens() *identity.Store    { return b.tokens }
 func (b *backend) AdminToken() string         { return "admintoken" }
 func (b *backend) Logger() *slog.Logger       { return slog.New(slog.DiscardHandler) }
+func (b *backend) Supervisor() *supervisor.Supervisor {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.sup == nil {
+		b.sup = supervisor.New(supervisor.Options{Config: b.cfg})
+	}
+	return b.sup
+}
 
 type fixture struct {
 	t      *testing.T

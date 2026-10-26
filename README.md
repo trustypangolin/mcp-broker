@@ -47,6 +47,37 @@ shows what it would bring over (secrets go to `secrets\<name>.env`, never `broke
 `--switch` to also point those clients at the broker (each original is kept as
 `.bak-<time>`; for Claude Code it prints the `claude mcp` commands instead).
 
+## Profiles: long-running apps
+
+A profile is an app the broker runs for agents and for you, such as ComfyUI:
+
+```yaml
+profiles:
+  comfyui:
+    description: ComfyUI on port 8188
+    cwd: G:\ComfyUI\ComfyUI
+    command: G:\ComfyUI\ComfyUI\venv\Scripts\python.exe
+    args: [main.py, --listen, 127.0.0.1, --port, "8188"]
+    path_prepend: [G:\ComfyUI\ComfyUI\venv\Scripts]
+    ports: [8188]
+    health: {http: "http://127.0.0.1:8188/system_stats", start_timeout: 10m}
+    stop: {timeout: 20s}         # CTRL_BREAK (SIGTERM elsewhere), then kill the tree
+    update:
+      - [git, -C, G:\ComfyUI\ComfyUI, pull]
+```
+
+Agents get two tools: `list_profiles`, and `profile` with `status`, `logs`, `plan`,
+`start`, `stop` and `update`. `start` returns at once with state `starting` and the health
+check moves it to `ready`. Every start shows the exact plan (command, arguments,
+environment names, ports, bind address) and checks first for a missing command or a port
+already taken (naming the process holding it). What each role may do is under
+`roles.<role>.profiles`; starting anything that listens beyond this PC always needs
+approval, and so does killing a process the broker did not start (`kill_foreign`).
+
+The broker owns every process it starts, children included, and stops them all when it
+exits. You can start and stop profiles from the tray's Profiles menu, the dashboard's
+Profiles page (with live logs), or `mcp-broker ps | start | stop | update | logs`.
+
 Without the tray: `mcp-broker init`, `mcp-broker token create <agent> --save`,
 `mcp-broker serve`, and `mcp-broker dashboard` to open the settings.
 
@@ -58,6 +89,7 @@ Without the tray: `mcp-broker init`, `mcp-broker token create <agent> --save`,
 | `mcp-broker connect --agent NAME` | stdio shim for clients; finds the broker and token itself |
 | `mcp-broker dashboard` | open the dashboard in a browser, signed in |
 | `mcp-broker status` | the running broker, its agents and connectors |
+| `mcp-broker ps` / `start` / `stop` / `update` / `logs` | profiles |
 | `mcp-broker reload` | re-read the config now |
 | `mcp-broker approvals [approve\|deny ID]` | list or decide pending approvals |
 | `mcp-broker token create\|list\|revoke` | agent tokens |

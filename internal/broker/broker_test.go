@@ -12,11 +12,13 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/trustypangolin/mcp-broker/internal/proc"
 	"github.com/trustypangolin/mcp-broker/internal/server"
 	"github.com/trustypangolin/mcp-broker/internal/testutil/fakemcp"
 )
 
 func TestMain(m *testing.M) {
+	proc.RunHelper()
 	fakemcp.MaybeRun()
 	os.Exit(m.Run())
 }
