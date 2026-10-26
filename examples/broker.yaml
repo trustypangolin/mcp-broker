@@ -10,6 +10,7 @@ server:
     - 172.16.0.0/12               # includes the WSL and wslc NAT ranges
     - 192.168.0.0/16
     - 100.64.0.0/10               # Tailscale
+    - 169.254.0.0/16              # wslc containers (host.wslc.internal is link-local)
     - fc00::/7
     - fe80::/10
   firewall_profile: private       # tray creates the inbound rule for this profile only
@@ -65,7 +66,7 @@ agents:
   wslc:
     role: sandbox
     match:
-      from: [172.16.0.0/12]
+      from: [169.254.0.0/16, 172.16.0.0/12]
     approvals: [tray, dashboard]
 
   lan:
@@ -170,6 +171,7 @@ connectors:
     description: Local ComfyUI control, models, workflows, jobs
     tags: [media]
     command: G:\ComfyUI\ComfyUI\venv\cu130-cp312\Scripts\comfy-mcp.exe
+    env: {COMFY_BIN: G:\ComfyUI\ComfyUI\venv\cu130-cp312\Scripts\comfy.exe}
     env_file: G:\Ai\.env
     idle_unload: 30m
     tool_classes:

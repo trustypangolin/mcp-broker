@@ -64,10 +64,10 @@ A process match passes if any process in the caller's parent chain matches. Clau
 running inside VS Code has both `claude.exe` and `Code.exe` in its chain, so it passes either
 check. Which role it gets depends on which agent's token its shim is configured with.
 
-Connections that match no agent:
-
-- from loopback without a token: role `anonymous` (sees no connectors);
-- from anywhere else: rejected with 401.
+Connections without a valid token are rejected with 401, from loopback too: an MCP session
+that could see nothing is no use to anyone, and refusing it makes a misconfigured client fail
+loudly. The built-in `anonymous` role (no connectors) remains as the fail-safe for any code
+path that cannot resolve an agent.
 
 ## 3. Roles
 
