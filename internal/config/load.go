@@ -149,6 +149,12 @@ func (c *Config) applyDefaults() {
 	}
 }
 
+// AgentTokenPath is where a saved token for the local stdio shim (`mcp-broker connect
+// --agent <name>`) lives, next to broker.yaml.
+func (c *Config) AgentTokenPath(agent string) string {
+	return filepath.Join(c.Dir, "agent-tokens", agent+".token")
+}
+
 func (c *Config) abs(p string) string {
 	if p == "" || filepath.IsAbs(p) || c.Dir == "" {
 		return p

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-broker · sign in</title>
+<link rel="icon" href="/ui/static/icon.svg">
+<link rel="stylesheet" href="/ui/static/style.css">
+</head>
+<body class="login">
+<main class="card narrow">
+  <h1><img src="/ui/static/icon.svg" alt="" width="28" height="28"> mcp-broker</h1>
+  <p class="muted">Open the dashboard from the tray icon, or run <code>mcp-broker dashboard</code>, to sign in without a password.</p>
+  <p class="error">{{MESSAGE}}</p>
+  <form method="post" action="/ui/login">
+    <label for="token">Admin token <span class="muted">(from <code>dashboard.token</code> next to broker.yaml)</span></label>
+    <input id="token" name="token" type="password" autocomplete="current-password" required>
+    <button type="submit" class="primary">Sign in</button>
+  </form>
+</main>
+</body>
+</html>

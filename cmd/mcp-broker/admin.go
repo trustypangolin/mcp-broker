@@ -21,17 +21,23 @@ type adminDo func(method, path string, body any) (*http.Response, error)
 // adminClient returns a caller for the running broker's admin API, authenticated with the
 // dashboard token.
 func adminClient(cfgFlag string) (adminDo, error) {
+	do, _, err := adminClientBase(cfgFlag)
+	return do, err
+}
+
+// adminClientBase is adminClient that also returns the broker's loopback base URL.
+func adminClientBase(cfgFlag string) (adminDo, string, error) {
 	path, err := config.ResolvePath(cfgFlag)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	cfg, err := config.Load(path)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	token, err := server.AdminToken(cfg.Dashboard.TokenFile)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	_, port, _ := net.SplitHostPort(cfg.Server.Listen)
 	base := "http://" + net.JoinHostPort("127.0.0.1", port)
@@ -53,7 +59,7 @@ func adminClient(cfgFlag string) (adminDo, error) {
 			return nil, fmt.Errorf("is the broker running? %w", err)
 		}
 		return resp, nil
-	}, nil
+	}, base, nil
 }
 
 // decodeOK decodes a 200 response into v, or turns any other status into an error.
@@ -136,4 +142,40 @@ func cmdStatus(args []string, stdout, stderr io.Writer) error {
 		fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", c.Key, state, c.Tools, pid)
 	}
 	return w.Flush()
+}
+
+func cmdDashboard(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("dashboard", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	cfgFlag := fs.String("config", "", "config file")
+	noOpen := fs.Bool("print", false, "print the sign-in link instead of opening a browser")
+	page := fs.String("page", "", "page to open: approvals, connectors, agents, config, audit")
+	if err := fs.Parse(args); err != nil {
+		return errUsage
+	}
+	do, base, err := adminClientBase(*cfgFlag)
+	if err != nil {
+		return err
+	}
+	resp, err := do(http.MethodPost, "/ui/api/login-code", nil)
+	if err != nil {
+		return err
+	}
+	var out struct{ Code string }
+	if err := decodeOK(resp, &out); err != nil {
+		return err
+	}
+	u := base + "/ui/login?code=" + out.Code
+	if *page != "" {
+		u += "&page=" + *page
+	}
+	if *noOpen {
+		fmt.Fprintln(stdout, u)
+		return nil
+	}
+	if err := openBrowser(u); err != nil {
+		return fmt.Errorf("opening a browser: %w (run with --print for the link)", err)
+	}
+	fmt.Fprintln(stdout, "opened the dashboard (the sign-in link works once, for 2 minutes)")
+	return nil
 }

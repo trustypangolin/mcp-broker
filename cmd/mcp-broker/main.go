@@ -17,7 +17,7 @@ const usage = `usage: mcp-broker <command> [flags]
 commands:
   serve       run the broker (Streamable HTTP; hosted by the tray app)
   connect     stdio shim: forward a stdio MCP client to the running broker
-  dashboard   run the dashboard only
+  dashboard   open the dashboard in a browser, signed in
   validate    check config, paths and commands
   token       create, list and revoke agent tokens
   approvals   list, approve or deny pending approvals on the running broker
@@ -67,7 +67,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdReload(rest, stdout, stderr)
 	case "status":
 		return cmdStatus(rest, stdout, stderr)
-	case "dashboard", "import", "ps", "stop":
+	case "dashboard":
+		return cmdDashboard(rest, stdout, stderr)
+	case "import", "ps", "stop":
 		return fmt.Errorf("%s: not implemented yet", cmd)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)

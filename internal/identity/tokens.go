@@ -210,6 +210,14 @@ func (s *Store) save(entries []TokenEntry) error {
 	return s.reload()
 }
 
+// SaveToken writes a token to an owner-only file, for the local shim to read.
+func SaveToken(path, token string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(token+"\n"), 0o600)
+}
+
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])

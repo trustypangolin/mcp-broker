@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mcp-broker</title>
+<link rel="icon" href="/ui/static/icon.svg">
+<link rel="stylesheet" href="/ui/static/style.css">
+<script src="/ui/static/app.js" defer></script>
+</head>
+<body>
+<header>
+  <div class="brand"><img src="/ui/static/icon.svg" alt="" width="24" height="24"> mcp-broker <span id="version" class="muted"></span></div>
+  <nav id="tabs">
+    <a href="#approvals" data-page="approvals">Approvals <span id="pending-badge" class="badge" hidden></span></a>
+    <a href="#connectors" data-page="connectors" data-admin>Connectors</a>
+    <a href="#agents" data-page="agents" data-admin>Agents</a>
+    <a href="#config" data-page="config" data-admin>Config</a>
+    <a href="#audit" data-page="audit" data-admin>Audit</a>
+  </nav>
+  <form method="post" action="/ui/logout" class="logout"><button type="submit" class="link">Sign out</button></form>
+</header>
+<div id="toast" role="status" hidden></div>
+<main id="page"></main>
+</body>
+</html>
