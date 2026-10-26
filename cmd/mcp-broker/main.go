@@ -20,6 +20,7 @@ commands:
   dashboard   run the dashboard only
   validate    check config, paths and commands
   token       create, list and revoke agent tokens
+  approvals   list, approve or deny pending approvals on the running broker
   import      seed connectors from a claude_desktop_config.json
   ps          list owned runs
   stop        stop a profile
@@ -54,7 +55,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdValidate(rest, stdout, stderr)
 	case "token":
 		return cmdToken(rest, stdout, stderr)
-	case "serve", "connect", "dashboard", "import", "ps", "stop":
+	case "serve":
+		return cmdServe(rest, stdout, stderr)
+	case "connect":
+		return cmdConnect(rest, stdout, stderr)
+	case "approvals":
+		return cmdApprovals(rest, stdout, stderr)
+	case "dashboard", "import", "ps", "stop":
 		return fmt.Errorf("%s: not implemented yet", cmd)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)

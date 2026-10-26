@@ -65,7 +65,11 @@ agents:
   wslc:
     role: sandbox
     match:
-      from: [172.16.0.0/12]
+      # wslc relays host.wslc.internal through a COM surrogate on the host, so containers
+      # arrive on loopback owned by dllhost.exe. Run containers with
+      # MCP_BROKER_URL=http://host.wslc.internal:8765/mcp.
+      from: [127.0.0.0/8, "::1/128"]
+      process: ['*\System32\dllhost.exe']
     approvals: [tray, dashboard]
 
   lan:
@@ -170,6 +174,7 @@ connectors:
     description: Local ComfyUI control, models, workflows, jobs
     tags: [media]
     command: G:\ComfyUI\ComfyUI\venv\cu130-cp312\Scripts\comfy-mcp.exe
+    env: {COMFY_BIN: G:\ComfyUI\ComfyUI\venv\cu130-cp312\Scripts\comfy.exe}
     env_file: G:\Ai\.env
     idle_unload: 30m
     tool_classes:
