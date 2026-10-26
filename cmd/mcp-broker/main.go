@@ -19,6 +19,7 @@ commands:
   connect     stdio shim: forward a stdio MCP client to the running broker
   dashboard   run the dashboard only
   validate    check config, paths and commands
+  token       create, list and revoke agent tokens
   import      seed connectors from a claude_desktop_config.json
   ps          list owned runs
   stop        stop a profile
@@ -51,6 +52,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return nil
 	case "validate":
 		return cmdValidate(rest, stdout, stderr)
+	case "token":
+		return cmdToken(rest, stdout, stderr)
 	case "serve", "connect", "dashboard", "import", "ps", "stop":
 		return fmt.Errorf("%s: not implemented yet", cmd)
 	case "help", "-h", "--help":
