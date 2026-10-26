@@ -1,0 +1,51 @@
+# Release builds: `git tag vX.Y.Z && git push --tags` runs .github/workflows/release.yml.
+version: 2
+project_name: mcp-broker
+
+builds:
+  - id: mcp-broker
+    main: ./cmd/mcp-broker
+    binary: mcp-broker
+    env: [CGO_ENABLED=0]
+    goos: [windows, linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/trustypangolin/mcp-broker/internal/version.Version=v{{.Version}}
+      - -X github.com/trustypangolin/mcp-broker/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/trustypangolin/mcp-broker/internal/version.Date={{.Date}}
+  - id: mcp-broker-tray
+    main: ./cmd/mcp-broker-tray
+    binary: mcp-broker-tray
+    env: [CGO_ENABLED=0]
+    goos: [windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -H windowsgui
+      - -X github.com/trustypangolin/mcp-broker/internal/version.Version=v{{.Version}}
+      - -X github.com/trustypangolin/mcp-broker/internal/version.Commit={{.ShortCommit}}
+      - -X github.com/trustypangolin/mcp-broker/internal/version.Date={{.Date}}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - docs/*.md
+      - examples/broker.yaml
+      - scripts/firewall.ps1
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  prerelease: auto   # v0.1.0-alpha.N is marked as a pre-release
+
+changelog:
+  use: git
+  sort: asc
