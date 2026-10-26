@@ -25,7 +25,7 @@ import (
 
 // Options configures Handler.
 type Options struct {
-	Config     *config.Config
+	// Identifier also supplies the current config, so a reload reaches every check.
 	Identifier *identity.Identifier
 	Gateway    *gateway.Gateway
 	Audit      *audit.Log
@@ -141,7 +141,7 @@ func (g *gate) refused(src netip.Addr, e *identity.Error) {
 // whether a broker is running before they have credentials sorted out.
 func (g *gate) health(w http.ResponseWriter, r *http.Request) {
 	remote, _, ok := addrs(r)
-	if !ok || !config.ContainsAddr(g.o.Config.Server.AllowedSources, remote.Addr()) {
+	if !ok || !config.ContainsAddr(g.o.Identifier.Config().Server.AllowedSources, remote.Addr()) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}

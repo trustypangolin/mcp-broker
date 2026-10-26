@@ -6,14 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"text/tabwriter"
-	"time"
 
 	"github.com/trustypangolin/mcp-broker/internal/approval"
-	"github.com/trustypangolin/mcp-broker/internal/config"
-	"github.com/trustypangolin/mcp-broker/internal/server"
 )
 
 const approvalsUsage = `usage: mcp-broker approvals [list | approve <id> | deny <id>] [--config PATH]
@@ -36,34 +32,9 @@ func cmdApprovals(args []string, stdout, stderr io.Writer) error {
 		}
 		pos, rest = append(pos, rest[0]), rest[1:]
 	}
-	path, err := config.ResolvePath(*cfgFlag)
+	do, err := adminClient(*cfgFlag)
 	if err != nil {
 		return err
-	}
-	cfg, err := config.Load(path)
-	if err != nil {
-		return err
-	}
-	token, err := server.AdminToken(cfg.Dashboard.TokenFile)
-	if err != nil {
-		return err
-	}
-	_, port, _ := net.SplitHostPort(cfg.Server.Listen)
-	base := "http://" + net.JoinHostPort("127.0.0.1", port)
-	if cfg.Server.TLS.CertFile != "" {
-		base = "https://" + net.JoinHostPort("localhost", port)
-	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	do := func(method, url string, body any) (*http.Response, error) {
-		var r io.Reader
-		if body != nil {
-			b, _ := json.Marshal(body)
-			r = bytes.NewReader(b)
-		}
-		req, _ := http.NewRequest(method, base+url, r)
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/json")
-		return client.Do(req)
 	}
 
 	sub := "list"
@@ -74,7 +45,7 @@ func cmdApprovals(args []string, stdout, stderr io.Writer) error {
 	case "list":
 		resp, err := do(http.MethodGet, "/admin/approvals", nil)
 		if err != nil {
-			return fmt.Errorf("is the broker running? %w", err)
+			return err
 		}
 		defer resp.Body.Close()
 		var out struct{ Approvals []approval.Entry }
@@ -94,7 +65,7 @@ func cmdApprovals(args []string, stdout, stderr io.Writer) error {
 		}
 		resp, err := do(http.MethodPost, "/admin/approvals/"+pos[1], map[string]bool{"approve": sub == "approve"})
 		if err != nil {
-			return fmt.Errorf("is the broker running? %w", err)
+			return err
 		}
 		defer resp.Body.Close()
 		b, _ := io.ReadAll(resp.Body)

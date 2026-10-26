@@ -9,9 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -27,7 +30,8 @@ import (
 
 // Options wires a Gateway to the rest of the broker.
 type Options struct {
-	Config    *config.Config
+	Config *config.Config
+	// Policy defaults to policy.New(Config); Reload replaces it.
 	Policy    *policy.Engine
 	Approvals *approval.Queue
 	Audit     *audit.Log
@@ -47,7 +51,7 @@ type Options struct {
 // Gateway serves the meta-tools.
 type Gateway struct {
 	opts Options
-	cfg  *config.Config
+	cur  atomic.Pointer[state]
 	red  *redact.Redactor
 	log  *slog.Logger
 
@@ -69,10 +73,102 @@ func New(opts Options) *Gateway {
 	if opts.ApprovalWait == 0 {
 		opts.ApprovalWait = 25 * time.Second
 	}
-	g := &Gateway{opts: opts, cfg: opts.Config, red: opts.Redactor, log: opts.Logger, conns: map[string]*downstream{}, stop: make(chan struct{})}
+	if opts.Policy == nil {
+		opts.Policy = policy.New(opts.Config)
+	}
+	g := &Gateway{opts: opts, red: opts.Redactor, log: opts.Logger, conns: map[string]*downstream{}, stop: make(chan struct{})}
+	g.cur.Store(&state{cfg: opts.Config, pol: opts.Policy})
 	g.done.Add(1)
 	go g.idleLoop()
 	return g
+}
+
+// state is the config a call runs against; Reload swaps it whole.
+type state struct {
+	cfg *config.Config
+	pol *policy.Engine
+}
+
+func (g *Gateway) st() *state { return g.cur.Load() }
+
+// Reload switches the gateway to cfg. Connectors that were removed or whose definition
+// changed are unloaded (calls in flight on them fail) and restart on next use with the new
+// definition; the others keep running. It returns the unloaded connector keys.
+func (g *Gateway) Reload(cfg *config.Config) []string {
+	g.cur.Store(&state{cfg: cfg, pol: policy.New(cfg)})
+	g.mu.Lock()
+	var stale []*downstream
+	for key, d := range g.conns {
+		if cn, ok := cfg.Connectors[d.name]; !ok || !reflect.DeepEqual(cn, d.cn) {
+			stale = append(stale, d)
+			delete(g.conns, key)
+		}
+	}
+	g.mu.Unlock()
+	var keys []string
+	for _, d := range stale {
+		if d.loaded() {
+			keys = append(keys, d.key)
+		}
+		d.close()
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+// Connector describes one connector instance for the dashboard and tray.
+type Connector struct {
+	Key    string   `json:"key"`
+	Name   string   `json:"name"`
+	Loaded bool     `json:"loaded"`
+	Tools  int      `json:"tools"`
+	PID    int      `json:"pid,omitempty"`
+	Remote bool     `json:"remote,omitempty"`
+	Stderr []string `json:"stderr,omitempty"` // recent lines, redacted
+}
+
+// Connectors lists every configured connector, with the state of each instance that has
+// been used (a per_agent connector may have several).
+func (g *Gateway) Connectors() []Connector {
+	cfg := g.st().cfg
+	g.mu.Lock()
+	byName := map[string][]*downstream{}
+	for _, d := range g.conns {
+		byName[d.name] = append(byName[d.name], d)
+	}
+	g.mu.Unlock()
+	var out []Connector
+	for _, name := range slices.Sorted(maps.Keys(cfg.Connectors)) {
+		ds := byName[name]
+		if len(ds) == 0 {
+			out = append(out, Connector{Key: name, Name: name, Remote: cfg.Connectors[name].Remote()})
+			continue
+		}
+		slices.SortFunc(ds, func(a, b *downstream) int { return strings.Compare(a.key, b.key) })
+		for _, d := range ds {
+			c := Connector{Key: d.key, Name: name, Loaded: d.loaded(), Remote: d.cn.Remote(), Stderr: d.recentStderr(20)}
+			_, tools := d.snapshot()
+			c.Tools = len(tools)
+			if p := d.process(); p != nil {
+				c.PID = p.PID()
+			}
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// Unload stops a connector instance by key (as listed by Connectors). It reports whether
+// the instance was loaded.
+func (g *Gateway) Unload(key string) bool {
+	g.mu.Lock()
+	d, ok := g.conns[key]
+	g.mu.Unlock()
+	if !ok || !d.loaded() {
+		return false
+	}
+	d.close()
+	return true
 }
 
 // Close unloads every connector, stopping their processes.
@@ -105,7 +201,7 @@ func IdentityFromRequest(req *mcp.CallToolRequest) identity.Identity {
 }
 
 func (g *Gateway) conn(name, agent string) (*downstream, bool) {
-	cn, ok := g.cfg.Connectors[name]
+	cn, ok := g.st().cfg.Connectors[name]
 	if !ok {
 		return nil, false
 	}
@@ -243,9 +339,9 @@ type connectorInfo struct {
 func (g *Gateway) listConnectors(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	id := g.opts.Identity(req)
 	out := []connectorInfo{}
-	for _, name := range g.opts.Policy.VisibleConnectors(id.Agent) {
+	for _, name := range g.st().pol.VisibleConnectors(id.Agent) {
 		d, _ := g.conn(name, id.Agent)
-		out = append(out, connectorInfo{Name: name, Description: g.cfg.Connectors[name].Description, Loaded: d.loaded()})
+		out = append(out, connectorInfo{Name: name, Description: g.st().cfg.Connectors[name].Description, Loaded: d.loaded()})
 	}
 	return jsonResult(map[string]any{"connectors": out}), nil
 }
@@ -261,7 +357,7 @@ type toolInfo struct {
 // loadable resolves a connector for an agent, starting it if needed. Unknown and invisible
 // connectors produce the same message so an agent cannot probe for hidden ones.
 func (g *Gateway) loadable(ctx context.Context, id identity.Identity, name string) (*downstream, *mcp.CallToolResult) {
-	if !g.opts.Policy.Visible(id.Agent, name) {
+	if !g.st().pol.Visible(id.Agent, name) {
 		g.write(audit.Event{Kind: audit.KindToolCall, Agent: id.Agent, Connector: name, Decision: string(config.Deny), Detail: "connector not visible"})
 		return nil, textResult(true, "unknown connector %q", name)
 	}
@@ -296,7 +392,7 @@ func (g *Gateway) loadConnector(ctx context.Context, req *mcp.CallToolRequest) (
 	_, tools := d.snapshot()
 	out := []toolInfo{}
 	for _, t := range tools {
-		dec := g.opts.Policy.Tool(id.Agent, a.Name, t.Name, annotations(t))
+		dec := g.st().pol.Tool(id.Agent, a.Name, t.Name, annotations(t))
 		if dec.Action == config.Deny {
 			continue // denied tools are hidden, not advertised
 		}
@@ -311,7 +407,7 @@ func (g *Gateway) unloadConnector(_ context.Context, req *mcp.CallToolRequest) (
 		return textResult(true, "%v", err), nil
 	}
 	id := g.opts.Identity(req)
-	if !g.opts.Policy.Visible(id.Agent, a.Name) {
+	if !g.st().pol.Visible(id.Agent, a.Name) {
 		return textResult(true, "unknown connector %q", a.Name), nil
 	}
 	d, _ := g.conn(a.Name, id.Agent)
@@ -374,7 +470,7 @@ func (g *Gateway) callTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.
 	t := d.tool(a.Tool)
 	var dec policy.Decision
 	if t != nil {
-		dec = g.opts.Policy.Tool(id.Agent, a.Connector, a.Tool, annotations(t))
+		dec = g.st().pol.Tool(id.Agent, a.Connector, a.Tool, annotations(t))
 	}
 	if t == nil || dec.Action == config.Deny {
 		ev.Decision, ev.Detail = string(config.Deny), "unknown or denied tool"
@@ -458,7 +554,7 @@ func (g *Gateway) forward(ctx context.Context, req *mcp.CallToolRequest, id iden
 
 // truncate enforces server.max_result_bytes on text content, and says so in the result.
 func (g *Gateway) truncate(res *mcp.CallToolResult) *mcp.CallToolResult {
-	limit := g.cfg.Server.MaxResultBytes
+	limit := g.st().cfg.Server.MaxResultBytes
 	b, err := json.Marshal(res)
 	if err != nil || len(b) <= limit {
 		return res
@@ -506,7 +602,7 @@ func (g *Gateway) approve(ctx context.Context, req *mcp.CallToolRequest, id iden
 		}
 	}
 
-	channels := g.opts.Policy.Channels(id.Agent)
+	channels := g.st().pol.Channels(id.Agent)
 	canElicit := slices.Contains(channels, config.ChanElicitation) && supportsElicitation(req)
 	if !canElicit {
 		channels = slices.DeleteFunc(slices.Clone(channels), func(c config.Channel) bool { return c == config.ChanElicitation })
@@ -523,7 +619,7 @@ func (g *Gateway) approve(ctx context.Context, req *mcp.CallToolRequest, id iden
 
 	wait := g.opts.ApprovalWait
 	if canElicit {
-		wait = g.cfg.Approvals.Timeout
+		wait = g.st().cfg.Approvals.Timeout
 	}
 	wctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()

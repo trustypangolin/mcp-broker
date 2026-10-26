@@ -254,6 +254,27 @@ func (d *downstream) touch() {
 	d.mu.Unlock()
 }
 
+func (d *downstream) process() *proc.Process {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.proc
+}
+
+// recentStderr returns the last n stderr lines, redacted.
+func (d *downstream) recentStderr(n int) []string {
+	d.mu.Lock()
+	r := d.stderr
+	d.mu.Unlock()
+	if r == nil {
+		return nil
+	}
+	lines := r.Tail(n)
+	for i, l := range lines {
+		lines[i] = d.g.red.String(l)
+	}
+	return lines
+}
+
 func (d *downstream) stderrTail() string {
 	if d.stderr == nil {
 		return ""

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 
 	"github.com/trustypangolin/mcp-broker/internal/config"
 	"github.com/trustypangolin/mcp-broker/internal/glob"
@@ -40,7 +41,7 @@ func refuse(status int, public, format string, args ...any) *Error {
 
 // Identifier resolves connections against one config and the token store.
 type Identifier struct {
-	cfg   *config.Config
+	cfg   atomic.Pointer[config.Config]
 	store *Store
 
 	// Seams for tests; procinfo on a real host.
@@ -50,8 +51,19 @@ type Identifier struct {
 
 // New returns an Identifier.
 func New(cfg *config.Config, store *Store) *Identifier {
-	return &Identifier{cfg: cfg, store: store, connOwner: procinfo.ConnOwner, chain: procinfo.Chain}
+	id := &Identifier{store: store, connOwner: procinfo.ConnOwner, chain: procinfo.Chain}
+	id.cfg.Store(cfg)
+	return id
 }
+
+// SetConfig switches to a reloaded config; the next request is checked against it.
+func (id *Identifier) SetConfig(cfg *config.Config) { id.cfg.Store(cfg) }
+
+// Config returns the config requests are currently checked against.
+func (id *Identifier) Config() *config.Config { return id.cfg.Load() }
+
+// Store returns the token store.
+func (id *Identifier) Store() *Store { return id.store }
 
 // BearerToken extracts the token from an Authorization header value.
 func BearerToken(header string) string {
@@ -65,8 +77,9 @@ func BearerToken(header string) string {
 // Identify decides who is on the other end of a connection. remote is the client's address
 // (http.Request.RemoteAddr) and local the server's (http.LocalAddrContextKey).
 func (id *Identifier) Identify(remote, local netip.AddrPort, token string) (Identity, error) {
+	cfg := id.cfg.Load()
 	src := remote.Addr().Unmap()
-	if !config.ContainsAddr(id.cfg.Server.AllowedSources, src) {
+	if !config.ContainsAddr(cfg.Server.AllowedSources, src) {
 		return Identity{}, refuse(http.StatusForbidden, "source not allowed", "source %s not in server.allowed_sources", src)
 	}
 
@@ -81,7 +94,7 @@ func (id *Identifier) Identify(remote, local netip.AddrPort, token string) (Iden
 	if !ok {
 		return Identity{}, refuse(http.StatusUnauthorized, "invalid token", "unknown or revoked token from %s", src)
 	}
-	agent, ok := id.cfg.Agents[entry.Agent]
+	agent, ok := cfg.Agents[entry.Agent]
 	if !ok {
 		return Identity{}, refuse(http.StatusUnauthorized, "invalid token", "token %s names agent %q which is not in config", entry.ID, entry.Agent)
 	}
