@@ -113,20 +113,23 @@ func (c Connector) Remote() bool { return c.URL != "" }
 
 // Profile is a supervised long-running local process (ComfyUI and friends).
 type Profile struct {
-	Description    string            `yaml:"description"`
-	Cwd            string            `yaml:"cwd"`
-	Command        string            `yaml:"command"`
-	Args           []string          `yaml:"args"`
-	EnvFile        string            `yaml:"env_file"`
-	Env            map[string]string `yaml:"env"`
-	PathPrepend    []string          `yaml:"path_prepend"`
-	Ports          []int             `yaml:"ports"`
-	NetworkExposed bool              `yaml:"network_exposed"`
-	Console        bool              `yaml:"console"`
-	Detach         bool              `yaml:"detach"`
-	Health         Health            `yaml:"health"`
-	Stop           Stop              `yaml:"stop"`
-	Update         [][]string        `yaml:"update"`
+	Description string            `yaml:"description"`
+	Cwd         string            `yaml:"cwd"`
+	Command     string            `yaml:"command"`
+	Args        []string          `yaml:"args"`
+	EnvFile     string            `yaml:"env_file"`
+	Env         map[string]string `yaml:"env"`
+	PathPrepend []string          `yaml:"path_prepend"`
+	Ports       []int             `yaml:"ports"`
+	// RequiresPaths must exist for start to go ahead: folders on drives that are not
+	// always mounted (encrypted or removable), say.
+	RequiresPaths  []string   `yaml:"requires_paths"`
+	NetworkExposed bool       `yaml:"network_exposed"`
+	Console        bool       `yaml:"console"`
+	Detach         bool       `yaml:"detach"`
+	Health         Health     `yaml:"health"`
+	Stop           Stop       `yaml:"stop"`
+	Update         [][]string `yaml:"update"`
 }
 
 type Health struct {

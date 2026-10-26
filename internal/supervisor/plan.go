@@ -177,6 +177,11 @@ func (s *Supervisor) Plan(name, action string) (Plan, error) {
 				pl.Blocking = append(pl.Blocking, "working directory not found: "+pl.Cwd)
 			}
 		}
+		for _, rp := range p.RequiresPaths {
+			if _, err := os.Stat(rp); err != nil {
+				pl.Blocking = append(pl.Blocking, rp+" is not available (is its drive mounted?)")
+			}
+		}
 		if !ours && len(pl.Conflicts) > 0 {
 			pl.Blocking = append(pl.Blocking, pl.Conflicts...)
 		}

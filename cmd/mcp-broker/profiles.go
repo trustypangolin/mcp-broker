@@ -131,3 +131,29 @@ func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
 		pos, rest = append(pos, fs.Arg(0)), fs.Args()[1:]
 	}
 }
+
+func cmdPlan(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("plan", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	cfgFlag := fs.String("config", "", "config file")
+	what := fs.String("for", "start", "start, stop or update")
+	pos, err := parseInterleaved(fs, args)
+	if err != nil || len(pos) != 1 {
+		fmt.Fprintln(stderr, "usage: mcp-broker plan <profile> [--for start|stop|update] [--config PATH]")
+		return errUsage
+	}
+	do, err := adminClient(*cfgFlag)
+	if err != nil {
+		return err
+	}
+	resp, err := do(http.MethodGet, "/admin/profiles/"+url.PathEscape(pos[0])+"/plan?for="+url.QueryEscape(*what), nil)
+	if err != nil {
+		return err
+	}
+	var out struct{ Text string }
+	if err := decodeOK(resp, &out); err != nil {
+		return err
+	}
+	fmt.Fprint(stdout, out.Text)
+	return nil
+}

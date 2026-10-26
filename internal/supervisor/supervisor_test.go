@@ -368,3 +368,19 @@ func TestProfilesSharingAPortAreExclusive(t *testing.T) {
 		t.Fatal("started a second profile on the same port")
 	}
 }
+
+func TestRequiresPaths(t *testing.T) {
+	f := newFixture(t, "server", "")
+	cfg := f.sup.cfg.Load()
+	p := cfg.Profiles["app"]
+	p.RequiresPaths = []string{f.dir, filepath.Join(f.dir, "not-mounted")}
+	cfg.Profiles["app"] = p
+	pl, _ := f.sup.Plan("app", "start")
+	if len(pl.Blocking) != 1 || !strings.Contains(pl.Blocking[0], "not-mounted is not available") {
+		t.Fatalf("blocking: %v", pl.Blocking)
+	}
+	os.Mkdir(filepath.Join(f.dir, "not-mounted"), 0o700)
+	if pl, _ := f.sup.Plan("app", "start"); len(pl.Blocking) != 0 {
+		t.Fatalf("still blocked: %v", pl.Blocking)
+	}
+}
