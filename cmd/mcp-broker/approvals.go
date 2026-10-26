@@ -101,7 +101,8 @@ func cmdApprovals(args []string, stdout, stderr io.Writer) error {
 		if resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("%s: %s", resp.Status, bytes.TrimSpace(b))
 		}
-		fmt.Fprintf(stdout, "%sd %s\n", sub, pos[1])
+		past := map[string]string{"approve": "approved", "deny": "denied"}[sub]
+		fmt.Fprintf(stdout, "%s %s\n", past, pos[1])
 		return nil
 	}
 	fmt.Fprint(stderr, approvalsUsage)
