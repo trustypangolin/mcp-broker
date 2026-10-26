@@ -40,22 +40,11 @@ jobs:
           done
           GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui" -o /dev/null ./cmd/mcp-broker-tray
 
-  release-config:
+  package:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: check
-      - uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: build --snapshot --clean
+      - run: bash scripts/package.sh v0.0.0-ci

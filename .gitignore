@@ -8,3 +8,4 @@ tokens.yaml
 *.token
 audit.jsonl
 .env*
+/release/
