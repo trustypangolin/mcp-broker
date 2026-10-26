@@ -30,8 +30,10 @@ type Options struct {
 	Gateway    *gateway.Gateway
 	Audit      *audit.Log
 	Logger     *slog.Logger
-	// Admin, if set, mounts the admin API (approvals now; config later).
+	// Admin, if set, mounts the admin API.
 	Admin *AdminOptions
+	// Mount, if set, adds more routes (the dashboard).
+	Mount func(*http.ServeMux)
 }
 
 type identKey struct{}
@@ -64,6 +66,9 @@ func Handler(o Options) http.Handler {
 	mux.HandleFunc("/healthz", g.health)
 	if o.Admin != nil {
 		MountAdmin(mux, *o.Admin)
+	}
+	if o.Mount != nil {
+		o.Mount(mux)
 	}
 	return mux
 }

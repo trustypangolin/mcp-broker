@@ -21,6 +21,7 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/approval"
 	"github.com/trustypangolin/mcp-broker/internal/audit"
 	"github.com/trustypangolin/mcp-broker/internal/config"
+	"github.com/trustypangolin/mcp-broker/internal/dashboard"
 	"github.com/trustypangolin/mcp-broker/internal/gateway"
 	"github.com/trustypangolin/mcp-broker/internal/identity"
 	"github.com/trustypangolin/mcp-broker/internal/proc"
@@ -55,6 +56,7 @@ type Broker struct {
 	queue   *approval.Queue
 	gw      *gateway.Gateway
 	ident   *identity.Identifier
+	dash    *dashboard.Dashboard
 	admin   string
 	srv     *http.Server
 	base    string
@@ -135,12 +137,15 @@ func Start(opts Options) (b *Broker, err error) {
 	b.queue = approval.NewQueue(cfg.Approvals.Timeout)
 	b.gw = gateway.New(gateway.Options{
 		Config: cfg, Approvals: b.queue, Audit: b.aud, Redactor: b.red, Logger: b.log, LogDir: logDir,
+		DashboardURL: b.base + "/ui/",
 	})
 	cleanup = append(cleanup, b.gw.Close)
 	b.ident = identity.New(cfg, store)
+	b.dash = dashboard.New(b)
 	handler := server.Handler(server.Options{
 		Identifier: b.ident, Gateway: b.gw, Audit: b.aud, Logger: b.log,
 		Admin: &server.AdminOptions{Control: b, Token: b.admin, Approvals: b.queue, Audit: b.aud},
+		Mount: b.dash.Mount,
 	})
 	b.srv = &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -203,6 +208,16 @@ func (b *Broker) Approvals() *approval.Queue { return b.queue }
 
 // BaseURL is the broker's loopback URL, without a path.
 func (b *Broker) BaseURL() string { return b.base }
+
+// DashboardURL returns a single-use, signed-in link to the dashboard (optionally at a
+// page, e.g. "approvals"), for the tray to open in a browser.
+func (b *Broker) DashboardURL(page string) string {
+	u := b.base + "/ui/login?code=" + b.dash.LoginCode()
+	if page != "" {
+		u += "&page=" + page
+	}
+	return u
+}
 
 // AdminToken is the dashboard/admin bearer token.
 func (b *Broker) AdminToken() string { return b.admin }

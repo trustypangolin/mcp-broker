@@ -221,7 +221,7 @@ func (q *Queue) List(pendingOnly bool) []Entry {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.gc()
-	var out []Entry
+	out := []Entry{} // never nil: the dashboard expects a JSON array
 	for _, e := range q.entries {
 		if !pendingOnly || e.Status == Pending {
 			out = append(out, e.Entry)

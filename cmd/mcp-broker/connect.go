@@ -82,7 +82,7 @@ func findToken(file, agent string, cfg *config.Config) (string, error) {
 		candidates = append(candidates, file)
 	}
 	if agent != "" && cfg != nil {
-		candidates = append(candidates, AgentTokenPath(cfg, agent))
+		candidates = append(candidates, cfg.AgentTokenPath(agent))
 	}
 	if dir, err := os.UserConfigDir(); err == nil {
 		candidates = append(candidates, filepath.Join(dir, "mcp-broker", "token"))

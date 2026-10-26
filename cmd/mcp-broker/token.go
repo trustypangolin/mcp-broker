@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"text/tabwriter"
 
 	"github.com/trustypangolin/mcp-broker/internal/config"
@@ -19,12 +18,6 @@ const tokenUsage = `usage: mcp-broker token <create|list|revoke> [flags]
   list                                  list tokens (ids and agents, never tokens)
   revoke <token-id|agent>               revoke one token, or all of an agent's tokens
 `
-
-// AgentTokenPath is where `token create --save` puts a token for the local stdio shim
-// (`mcp-broker connect --agent <name>`), next to broker.yaml.
-func AgentTokenPath(cfg *config.Config, agent string) string {
-	return filepath.Join(cfg.Dir, "agent-tokens", agent+".token")
-}
 
 func cmdToken(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
@@ -78,8 +71,8 @@ func cmdToken(args []string, stdout, stderr io.Writer) error {
 			return err
 		}
 		if *save {
-			p := AgentTokenPath(cfg, agent)
-			if err := writeSecretFile(p, tok+"\n"); err != nil {
+			p := cfg.AgentTokenPath(agent)
+			if err := identity.SaveToken(p, tok); err != nil {
 				return fmt.Errorf("token created (%s) but saving failed: %w", e.ID, err)
 			}
 			fmt.Fprintf(stderr, "saved to %s\n", p)
@@ -109,7 +102,7 @@ func cmdToken(args []string, stdout, stderr io.Writer) error {
 		}
 		if _, ok := cfg.Agents[pos[0]]; ok {
 			// Revoking an agent also removes its saved shim token.
-			if err := os.Remove(AgentTokenPath(cfg, pos[0])); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if err := os.Remove(cfg.AgentTokenPath(pos[0])); err != nil && !errors.Is(err, os.ErrNotExist) {
 				fmt.Fprintf(stderr, "warning: %v\n", err)
 			}
 		}
@@ -118,11 +111,4 @@ func cmdToken(args []string, stdout, stderr io.Writer) error {
 	}
 	fmt.Fprint(stderr, tokenUsage)
 	return errUsage
-}
-
-func writeSecretFile(path, content string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	return os.WriteFile(path, []byte(content), 0o600)
 }
