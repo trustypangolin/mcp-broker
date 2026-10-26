@@ -38,3 +38,24 @@ jobs:
           for t in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
             GOOS=${t%/*} GOARCH=${t#*/} go build -o /dev/null ./cmd/mcp-broker
           done
+          GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui" -o /dev/null ./cmd/mcp-broker-tray
+
+  release-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: check
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: build --snapshot --clean
