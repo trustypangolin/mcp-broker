@@ -1,0 +1,148 @@
+# mcp-broker config, created on first run. See docs/PERMISSIONS.md for the model.
+# Add connectors from the tray (Settings) or below; the broker reloads this file on save.
+# No secrets belong in this file: token hashes live in tokens.yaml, secret env values in env_file.
+
+server:
+  listen: 127.0.0.1:8765          # MCP at /mcp, dashboard at /ui; the tray switches this to
+                                  # 0.0.0.0:8765 when you allow LAN and WSL access
+  allowed_sources:                # checked before anything else; non-loopback always needs a token
+    - 127.0.0.0/8
+    - ::1/128
+    - 10.0.0.0/8
+    - 172.16.0.0/12               # includes the WSL and wslc NAT ranges
+    - 192.168.0.0/16
+    - 100.64.0.0/10               # Tailscale
+    - fc00::/7
+    - fe80::/10
+  firewall_profile: private       # tray creates the inbound rule for this profile only
+  # tls:
+  #   cert_file: broker.crt
+  #   key_file: broker.key
+
+dashboard:
+  admin_from: [127.0.0.0/8, "::1/128"]   # config, agents, tokens: loopback + admin token only
+  # approvals and run status are reachable from server.allowed_sources
+
+approvals:
+  timeout: 120s                   # pending approval expires and is denied
+  notify: [tray]                  # also: ntfy
+  # ntfy:
+  #   url: https://ntfy.sh/your-topic
+
+audit:
+  path: audit.jsonl
+
+# ---------------------------------------------------------------------------
+# Agents: who is calling. The bearer token selects the agent; `match` conditions must
+# also hold or the request is refused (403). Tokens are managed from the tray.
+# ---------------------------------------------------------------------------
+agents:
+  claude-code:
+    role: owner
+    match:
+      process: ["*\\claude.exe", "*\\node.exe"]   # any process in the parent chain
+      from: [127.0.0.0/8, "::1/128"]
+    approvals: [elicitation, tray, dashboard]
+
+  claude-desktop:
+    role: owner
+    match:
+      process: ["*\\AnthropicClaude\\*\\claude.exe", "*\\WindowsApps\\Claude_*\\*"]
+      from: [127.0.0.0/8, "::1/128"]
+    approvals: [elicitation, tray, dashboard]
+
+  vscode:
+    role: coder
+    match:
+      process: ["*\\Code.exe", "*\\Code - Insiders.exe"]
+      from: [127.0.0.0/8, "::1/128"]
+    approvals: [tray, dashboard]
+
+  wsl:
+    role: sandbox
+    match:
+      from: [172.16.0.0/12]
+    approvals: [tray, dashboard]
+
+  wslc:
+    role: sandbox
+    match:
+      # wslc relays host.wslc.internal through a COM surrogate on the host, so containers
+      # arrive on loopback owned by dllhost.exe. Run containers with
+      # MCP_BROKER_URL=http://host.wslc.internal:8765/mcp.
+      from: [127.0.0.0/8, "::1/128"]
+      process: ['*\System32\dllhost.exe']
+    approvals: [tray, dashboard]
+
+  lan:
+    role: viewer
+    match:
+      from: [10.0.0.0/8, 192.168.0.0/16, 100.64.0.0/10]
+    approvals: [dashboard]
+
+# Built in, listed for clarity: unidentified loopback connections get role `anonymous`,
+# unidentified non-loopback connections are rejected.
+
+# ---------------------------------------------------------------------------
+# Roles: what an agent may see and do.
+# Classes: read < write < destructive < external < spend < exec. Missing keys deny.
+# ---------------------------------------------------------------------------
+roles:
+  owner:
+    connectors: ["*"]
+    classes: {read: allow, write: allow, destructive: approve, external: approve, spend: approve, exec: approve}
+    profiles: {status: allow, logs: allow, plan: allow, start: approve, stop: allow, update: approve}
+
+  coder:
+    connectors: ["tag:office", "tag:browser", "tag:media"]
+    classes: {read: allow, write: allow, destructive: approve, external: deny, spend: deny, exec: approve}
+    profiles: {status: allow, logs: allow, plan: allow, start: approve, stop: allow}
+    rules:
+      - match: "browser-control/get-recent-browser-history"
+        action: approve
+
+  sandbox:
+    connectors: ["tag:office", "tag:media"]
+    classes: {read: allow, write: approve, destructive: approve, external: deny, spend: deny, exec: deny}
+    profiles: {status: allow, logs: allow}
+
+  viewer:
+    connectors: ["*", "!tag:mail"]
+    classes: {read: allow}
+    profiles: {status: allow, logs: allow}
+    rules:
+      - match: "browser-control/*"
+        action: deny
+
+  anonymous:
+    connectors: []
+
+# ---------------------------------------------------------------------------
+# Global floors: apply to every agent and can only make a decision stricter.
+# ---------------------------------------------------------------------------
+policy:
+  floors:
+    - match: "sieve/sieve_put_script"       # filters all incoming mail
+      action: approve
+    - match: "sieve/sieve_*activate*"
+      action: approve
+    - match: "imap/imap_*account*"          # credential management
+      action: approve
+    - match: "*/*digital_signature*"
+      action: approve
+    - match: "*/*protect*"
+      action: approve
+
+# ---------------------------------------------------------------------------
+# Connectors: downstream MCP servers, started when an agent first uses them.
+#
+#   excel-live:
+#     description: Live edit of workbooks open in Excel
+#     tags: [office]
+#     command: uv
+#     args: [--directory, C:/path/to/excel-mcp-live, run, excel_mcp_server.py]
+#     idle_unload: 30m
+# ---------------------------------------------------------------------------
+connectors: {}
+
+profiles: {}

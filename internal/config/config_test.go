@@ -96,8 +96,6 @@ connectors:
 		"server.listen",
 		"agents.anonymous",
 		`agents.vscode.role: unknown role "missing"`,
-		`unknown connector "ghost"`,
-		"no connector has tag:nothing",
 		`unknown class "reading"`,
 		`unknown profile action "launch"`,
 		"rules[0].match",
@@ -219,5 +217,49 @@ func TestRoleSeesLastMatchWins(t *testing.T) {
 	r := Role{Connectors: []string{"tag:office", "!word-live", "comfy*"}}
 	if !r.Sees("excel-live", []string{"office"}) || r.Sees("word-live", []string{"office"}) || !r.Sees("comfy", nil) || r.Sees("imap", []string{"mail"}) {
 		t.Error("selector evaluation wrong")
+	}
+}
+
+func TestDanglingSelectorsAreWarnings(t *testing.T) {
+	cfg, err := Parse([]byte(`
+agents: {a: {role: r}}
+roles:
+  r: {connectors: [ghost, "tag:nothing", "*"]}
+connectors:
+  x: {command: x}
+`), t.TempDir())
+	if err != nil {
+		t.Fatalf("a role naming a removed connector must still load: %v", err)
+	}
+	var got []string
+	for _, i := range cfg.Check() {
+		if i.Warning && i.Where == "roles.r.connectors" {
+			got = append(got, i.Msg)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("warnings: %v", got)
+	}
+}
+
+func TestStarterIsValid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sub", "broker.yaml")
+	if err := WriteStarter(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteStarter(path); err == nil {
+		t.Fatal("starter overwrote an existing config")
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.Listen != "127.0.0.1:8765" || len(cfg.Agents) == 0 || len(cfg.Connectors) != 0 {
+		t.Fatalf("starter: listen %s, %d agents, %d connectors", cfg.Server.Listen, len(cfg.Agents), len(cfg.Connectors))
+	}
+	for _, i := range cfg.Check() {
+		if !i.Warning {
+			t.Errorf("starter check error: %s", i)
+		}
 	}
 }
