@@ -100,6 +100,7 @@ func MountAdmin(mux *http.ServeMux, o AdminOptions) {
 	mux.Handle("POST /admin/connectors/{key}/unload", a.guard(adminOnly, a.unload))
 	mux.Handle("GET /admin/profiles", a.guard(anyAllowed, a.profiles))
 	mux.Handle("GET /admin/profiles/{name}/logs", a.guard(anyAllowed, a.profileLogs))
+	mux.Handle("GET /admin/profiles/{name}/plan", a.guard(adminOnly, a.profilePlan))
 	mux.Handle("POST /admin/profiles/{name}/{action}", a.guard(adminOnly, a.profileAction))
 }
 
@@ -184,6 +185,20 @@ func (a *admin) profileLogs(w http.ResponseWriter, r *http.Request) {
 	n := 200
 	fmt.Sscan(r.URL.Query().Get("n"), &n)
 	writeJSON(w, map[string]any{"lines": a.o.Control.Supervisor().Logs(r.PathValue("name"), min(max(n, 1), 5000))})
+}
+
+func (a *admin) profilePlan(w http.ResponseWriter, r *http.Request) {
+	what := r.URL.Query().Get("for")
+	if what == "" {
+		what = "start"
+	}
+	pl, err := a.o.Control.Supervisor().Plan(r.PathValue("name"), what)
+	if err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"plan": pl, "text": pl.Text()})
 }
 
 // profileAction starts, stops or updates a profile for the user (the CLI, the tray, the

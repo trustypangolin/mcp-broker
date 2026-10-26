@@ -29,6 +29,7 @@ commands:
   ps          list profiles and their state
   start       start a profile (stop, update likewise)
   logs        show a profile's recent output
+  plan        show what starting (or --for update) a profile would do
   version     print version
 
 Run 'mcp-broker <command> -h' for command flags.
@@ -83,6 +84,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdProfileAction(cmd, rest, stdout, stderr)
 	case "logs":
 		return cmdLogs(rest, stdout, stderr)
+	case "plan":
+		return cmdPlan(rest, stdout, stderr)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return nil

@@ -140,9 +140,15 @@ func (s *Supervisor) Plan(name, action string) (Plan, error) {
 	}
 	pl.NetworkExposed = p.NetworkExposed || exposed(pl.Bind)
 
-	// Who holds the profile's ports, if not us.
+	// Who holds the profile's ports, if not us. Another profile on the same port counts
+	// even before it has bound it (ComfyUI takes a while to load), so two setups of one app
+	// are never started together.
 	if !ours {
 		for _, port := range p.Ports {
+			if other, state := s.portOwner(name, port); other != "" {
+				pl.Conflicts = append(pl.Conflicts, fmt.Sprintf("port %d is used by profile %s, which is %s; stop it first", port, other, state))
+				continue
+			}
 			if !portInUse(port) {
 				continue
 			}
@@ -171,6 +177,11 @@ func (s *Supervisor) Plan(name, action string) (Plan, error) {
 				pl.Blocking = append(pl.Blocking, "working directory not found: "+pl.Cwd)
 			}
 		}
+		for _, rp := range p.RequiresPaths {
+			if _, err := os.Stat(rp); err != nil {
+				pl.Blocking = append(pl.Blocking, rp+" is not available (is its drive mounted?)")
+			}
+		}
 		if !ours && len(pl.Conflicts) > 0 {
 			pl.Blocking = append(pl.Blocking, pl.Conflicts...)
 		}
@@ -185,6 +196,14 @@ func (s *Supervisor) Plan(name, action string) (Plan, error) {
 		}
 		if ours {
 			pl.Blocking = append(pl.Blocking, fmt.Sprintf("%s is %s; stop it before updating", name, st.State))
+		}
+		// Profiles sharing a port are setups of one app, which often share its checkout
+		// and models too: do not update one under another that is running.
+		for _, port := range p.Ports {
+			if other, state := s.portOwner(name, port); other != "" {
+				pl.Blocking = append(pl.Blocking, fmt.Sprintf("profile %s (same port %d) is %s; stop it before updating", other, port, state))
+				break
+			}
 		}
 	default:
 		return Plan{}, fmt.Errorf("unknown action %q (want start, stop or update)", action)
@@ -263,4 +282,19 @@ func (pl Plan) Text() string {
 		}
 	}
 	return b.String()
+}
+
+// portOwner returns another profile with a live run that uses port.
+func (s *Supervisor) portOwner(self string, port int) (string, State) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for name, r := range s.runs {
+		if name == self {
+			continue
+		}
+		if st := r.getState(); (st.running() || st == Updating) && slices.Contains(r.p.Ports, port) {
+			return name, st
+		}
+	}
+	return "", ""
 }
