@@ -70,7 +70,7 @@ func newFixture(t *testing.T) *fixture {
 	red := redact.New()
 	aud, _ := audit.Open(f.audit, red)
 	gw := gateway.New(gateway.Options{Config: cfg, Policy: policy.New(cfg), Approvals: approval.NewQueue(time.Minute), Audit: aud, Redactor: red})
-	ts := httptest.NewServer(Handler(Options{Config: cfg, Identifier: identity.New(cfg, store), Gateway: gw, Audit: aud}))
+	ts := httptest.NewServer(Handler(Options{Identifier: identity.New(cfg, store), Gateway: gw, Audit: aud}))
 	t.Cleanup(func() {
 		ts.Close()
 		gw.Close()

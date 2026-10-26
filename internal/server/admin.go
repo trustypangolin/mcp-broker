@@ -10,10 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/trustypangolin/mcp-broker/internal/approval"
 	"github.com/trustypangolin/mcp-broker/internal/audit"
 	"github.com/trustypangolin/mcp-broker/internal/config"
+	"github.com/trustypangolin/mcp-broker/internal/gateway"
 )
 
 // AdminToken reads the dashboard/admin token, creating it (owner-only) on first use. The
@@ -40,28 +42,65 @@ func AdminToken(path string) (string, error) {
 	return tok, nil
 }
 
+// Control is what the admin API needs from the running broker.
+type Control interface {
+	// Config is the config currently in force.
+	Config() *config.Config
+	// Reload re-reads the config file and applies it, or leaves the running config
+	// untouched and returns an error if the file is invalid.
+	Reload() (Reloaded, error)
+	// Status describes the broker and its connectors.
+	Status() Status
+	// Unload stops a connector instance, reporting whether it was loaded.
+	Unload(key string) bool
+}
+
+// Reloaded reports what a reload changed.
+type Reloaded struct {
+	Unloaded []string `json:"unloaded,omitempty"` // connector instances stopped because they changed
+	Restart  []string `json:"restart,omitempty"`  // settings that only take effect after a restart
+	Issues   []string `json:"issues,omitempty"`   // config.Check findings
+}
+
+// Status is the broker's state as the tray and dashboard show it.
+type Status struct {
+	Version    string              `json:"version"`
+	Config     string              `json:"config"`
+	URL        string              `json:"url"`
+	Started    time.Time           `json:"started"`
+	Pending    int                 `json:"pending_approvals"`
+	Connectors []gateway.Connector `json:"connectors"`
+	Agents     []string            `json:"agents"`
+}
+
 // AdminOptions configures the admin API.
 type AdminOptions struct {
-	Config    *config.Config
+	Control   Control
 	Token     string
 	Approvals *approval.Queue
 	Audit     *audit.Log
 }
 
-// MountAdmin adds the admin API to mux. Approvals are reachable from any allowed source
-// (so a phone can approve); everything else will be loopback-only (dashboard.admin_from).
+// MountAdmin adds the admin API to mux. Approvals and status are reachable from any allowed
+// source (so a phone can approve); changing the broker is limited to dashboard.admin_from.
 func MountAdmin(mux *http.ServeMux, o AdminOptions) {
 	a := &admin{o: o}
-	mux.Handle("GET /admin/approvals", a.guard(o.Config.Server.AllowedSources, a.listApprovals))
-	mux.Handle("POST /admin/approvals/{id}", a.guard(o.Config.Server.AllowedSources, a.decide))
+	anyAllowed := func(c *config.Config) []config.Prefix { return c.Server.AllowedSources }
+	adminOnly := func(c *config.Config) []config.Prefix { return c.Dashboard.AdminFrom }
+	mux.Handle("GET /admin/approvals", a.guard(anyAllowed, a.listApprovals))
+	mux.Handle("POST /admin/approvals/{id}", a.guard(anyAllowed, a.decide))
+	mux.Handle("GET /admin/status", a.guard(anyAllowed, a.status))
+	mux.Handle("POST /admin/reload", a.guard(adminOnly, a.reload))
+	mux.Handle("POST /admin/connectors/{key}/unload", a.guard(adminOnly, a.unload))
 }
 
 type admin struct{ o AdminOptions }
 
-func (a *admin) guard(from []config.Prefix, h http.HandlerFunc) http.Handler {
+func (a *admin) guard(from func(*config.Config) []config.Prefix, h http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		remote, _, ok := addrs(r)
-		if !ok || !config.ContainsAddr(from, remote.Addr()) {
+		cfg := a.o.Control.Config()
+		if !ok || !config.ContainsAddr(cfg.Server.AllowedSources, remote.Addr()) || !config.ContainsAddr(from(cfg), remote.Addr()) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -108,4 +147,22 @@ func (a *admin) decide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, e)
+}
+
+func (a *admin) status(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, a.o.Control.Status())
+}
+
+func (a *admin) reload(w http.ResponseWriter, _ *http.Request) {
+	res, err := a.o.Control.Reload()
+	if err != nil {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, res)
+}
+
+func (a *admin) unload(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{"unloaded": a.o.Control.Unload(r.PathValue("key"))})
 }

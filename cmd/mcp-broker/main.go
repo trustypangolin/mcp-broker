@@ -21,6 +21,8 @@ commands:
   validate    check config, paths and commands
   token       create, list and revoke agent tokens
   approvals   list, approve or deny pending approvals on the running broker
+  reload      re-read the config on the running broker
+  status      show the running broker and its connectors
   import      seed connectors from a claude_desktop_config.json
   ps          list owned runs
   stop        stop a profile
@@ -61,6 +63,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdConnect(rest, stdout, stderr)
 	case "approvals":
 		return cmdApprovals(rest, stdout, stderr)
+	case "reload":
+		return cmdReload(rest, stdout, stderr)
+	case "status":
+		return cmdStatus(rest, stdout, stderr)
 	case "dashboard", "import", "ps", "stop":
 		return fmt.Errorf("%s: not implemented yet", cmd)
 	case "help", "-h", "--help":
