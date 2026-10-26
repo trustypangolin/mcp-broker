@@ -70,4 +70,7 @@ Without the tray: `mcp-broker init`, `mcp-broker token create <agent> --save`,
 go build ./cmd/mcp-broker
 go build -ldflags "-H windowsgui" ./cmd/mcp-broker-tray
 go test ./...
+bash scripts/package.sh v0.1.0   # release archives into ./release
 ```
+
+Pushing a `v*` tag runs the same script in GitHub Actions and publishes a release.
