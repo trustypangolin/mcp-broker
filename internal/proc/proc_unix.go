@@ -3,9 +3,6 @@
 package proc
 
 import (
-	"os"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -51,16 +48,7 @@ func (p *Process) adopt(time.Time) bool {
 
 // isAlive treats a zombie (exited, not yet reaped) as dead.
 func isAlive(pid int) bool {
-	if syscall.Kill(pid, 0) != nil {
-		return false
-	}
-	if data, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat"); err == nil {
-		// The state follows the parenthesised command name, which may contain spaces.
-		if i := strings.LastIndexByte(string(data), ')'); i >= 0 && i+2 < len(data) {
-			return data[i+2] != 'Z'
-		}
-	}
-	return true
+	return syscall.Kill(pid, 0) == nil && !zombie(pid)
 }
 
 // RunHelper is a no-op outside Windows: signals reach process groups directly.
