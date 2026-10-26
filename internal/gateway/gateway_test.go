@@ -84,7 +84,7 @@ func newHarness(t *testing.T, mode string, tweak func(*config.Config)) *harness 
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.q = approval.NewQueue(5 * time.Second)
+	h.q = approval.NewQueue(time.Minute)
 	h.gw = New(Options{
 		Config: cfg, Policy: policy.New(cfg), Approvals: h.q, Audit: aud, Redactor: red,
 		LogDir:       filepath.Join(dir, "logs"),
@@ -259,13 +259,16 @@ func TestApprovalByDashboard(t *testing.T) {
 		t.Error("coder must never be asked by elicitation")
 		return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"approve": true}}
 	}
+	// Event-driven, not polled against a deadline: under -race on a small CI runner the
+	// fake connector alone can take seconds to start.
+	events, cancel := h.q.Subscribe()
+	defer cancel()
 	go func() {
-		for i := 0; i < 200; i++ {
-			for _, e := range h.q.List(true) {
+		for e := range events {
+			if e.Status == approval.Pending {
 				h.q.Decide(e.ID, true, config.ChanDashboard)
 				return
 			}
-			time.Sleep(20 * time.Millisecond)
 		}
 	}()
 	out, isErr := h.as("coder").callFake("delete_thing", map[string]any{"text": "a"})
