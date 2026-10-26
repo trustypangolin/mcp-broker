@@ -204,7 +204,7 @@ func TestApproveFromDashboard(t *testing.T) {
 func TestConnectorAndAgentForms(t *testing.T) {
 	f := newFixture(t, base)
 	f.signIn()
-	st, out := f.do("PUT", "/ui/api/connectors/notes", connectorForm{Description: "Notes", Command: "notes.exe", Args: []string{"--stdio"}, Tags: []string{"files"}}, nil)
+	st, out := f.do("PUT", "/ui/api/connectors/notes", config.ConnectorEntry{Description: "Notes", Command: "notes.exe", Args: []string{"--stdio"}, Tags: []string{"files"}}, nil)
 	if st != 200 {
 		t.Fatalf("put connector: %d %v", st, out)
 	}
@@ -217,10 +217,10 @@ func TestConnectorAndAgentForms(t *testing.T) {
 			t.Errorf("file lost %q:\n%s", want, data)
 		}
 	}
-	if st, _ := f.do("PUT", "/ui/api/connectors/bad", connectorForm{}, nil); st != http.StatusBadRequest {
+	if st, _ := f.do("PUT", "/ui/api/connectors/bad", config.ConnectorEntry{}, nil); st != http.StatusBadRequest {
 		t.Errorf("connector with neither command nor url: %d", st)
 	}
-	if st, _ := f.do("PUT", "/ui/api/connectors/..%2Fx", connectorForm{Command: "x"}, nil); st != http.StatusBadRequest {
+	if st, _ := f.do("PUT", "/ui/api/connectors/..%2Fx", config.ConnectorEntry{Command: "x"}, nil); st != http.StatusBadRequest {
 		t.Errorf("bad name: %d", st)
 	}
 	if st, _ := f.do("DELETE", "/ui/api/connectors/notes", nil, nil); st != 200 || len(f.b.Config().Connectors) != 1 {
