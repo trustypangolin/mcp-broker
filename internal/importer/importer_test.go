@@ -127,6 +127,25 @@ func TestPlanSystemVars(t *testing.T) {
 	}
 }
 
+func TestGuessTags(t *testing.T) {
+	for _, c := range []struct {
+		name, cmd string
+		args      []string
+		want      []string
+	}{
+		{"word-live", "uv", []string{"--directory", "G:/x/word-mcp-live", "run", "word_mcp_server.py"}, []string{"office"}},
+		{"fb-staging", "npx", []string{"-y", "@automattic/mcp-wordpress-remote@latest"}, nil},
+		{"vault", "tool", []string{"--password-file", "x"}, nil},
+		{"imap", "node", []string{`C:\imap-mcp-server\dist\index.js`}, []string{"mail"}},
+		{"comfy-mcp", `G:\ComfyUI\Scripts\comfy-mcp.exe`, nil, []string{"media"}},
+		{"pw", "npx", []string{"@playwright/mcp"}, []string{"browser"}},
+	} {
+		if got := guessTags(c.name, Server{Command: c.cmd, Args: c.args}); !slices.Equal(got, c.want) {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestPlanConflictAndOverwrite(t *testing.T) {
 	f := setup(t)
 	cn := f.cfg.Connectors["excel-live"]

@@ -66,20 +66,24 @@ func isShim(s Server) bool {
 
 // guessTags picks tags from well-known names, so the default roles (which select by tag)
 // treat imported connectors sensibly. Mail is tagged so the LAN viewer role excludes it.
+// Words match whole tokens, so "wordpress" is not "word" and "password" is not office.
 func guessTags(name string, s Server) []string {
 	hay := strings.ToLower(name + " " + s.Command + " " + strings.Join(s.Args, " "))
+	tokens := strings.FieldsFunc(hay, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	})
 	var out []string
 	for _, g := range []struct {
 		tag   string
 		words []string
 	}{
 		{"office", []string{"excel", "word", "powerpoint", "office", "docx", "xlsx", "pptx", "outlook"}},
-		{"mail", []string{"mail", "imap", "smtp", "sieve", "gmail", "pop3"}},
+		{"mail", []string{"mail", "email", "imap", "smtp", "sieve", "gmail", "pop3"}},
 		{"browser", []string{"browser", "chrome", "firefox", "playwright", "puppeteer"}},
-		{"media", []string{"comfy", "image", "video", "audio", "media", "stable-diffusion"}},
+		{"media", []string{"comfy", "comfyui", "image", "video", "audio", "media", "diffusion"}},
 	} {
 		for _, w := range g.words {
-			if strings.Contains(hay, w) {
+			if slices.Contains(tokens, w) {
 				out = append(out, g.tag)
 				break
 			}
