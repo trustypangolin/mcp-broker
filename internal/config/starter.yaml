@@ -142,6 +142,12 @@ policy:
 #     command: uv
 #     args: [--directory, C:/path/to/excel-mcp-live, run, excel_mcp_server.py]
 #     idle_unload: 30m
+#
+#   xero:                                   # remote, OAuth sign-in (mcp-broker signin xero)
+#     url: https://api.xero.com/mcp/v1
+#     oauth:
+#       client_id: YOUR_CLIENT_ID           # register http://localhost:8765/oauth/callback
+#       scopes: [openid, offline_access, accounting.invoices.read]
 # ---------------------------------------------------------------------------
 connectors: {}
 

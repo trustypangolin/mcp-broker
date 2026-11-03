@@ -86,6 +86,7 @@ type Resolved struct {
 	URL     string
 	Env     map[string]string // only the variables the config names, not the broker's own env
 	Headers map[string]string
+	OAuth   *OAuth          // expanded; nil when the connector does not use OAuth
 	Secret  map[string]bool // env keys whose values are secret
 }
 
@@ -169,7 +170,22 @@ func resolve(envFile string, env map[string]string, command string, args []strin
 
 // Resolve loads the connector's env_file and expands its settings.
 func (c Connector) Resolve(red *redact.Redactor) (*Resolved, error) {
-	return resolve(c.EnvFile, c.Env, c.Command, c.Args, c.Cwd, c.URL, c.Headers, red)
+	r, err := resolve(c.EnvFile, c.Env, c.Command, c.Args, c.Cwd, c.URL, c.Headers, red)
+	if err != nil || c.OAuth == nil {
+		return r, err
+	}
+	o := *c.OAuth
+	for _, f := range []struct {
+		name string
+		v    *string
+	}{{"client_id", &o.ClientID}, {"client_secret", &o.ClientSecret}, {"redirect_url", &o.RedirectURL}} {
+		if *f.v, err = Expand(*f.v, r.Env); err != nil {
+			return nil, fmt.Errorf("oauth.%s: %w", f.name, err)
+		}
+	}
+	red.Add(o.ClientSecret)
+	r.OAuth = &o
+	return r, nil
 }
 
 // Resolve loads the profile's env_file and expands its settings.

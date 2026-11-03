@@ -283,7 +283,7 @@ func (a *app) notify(kind uint32, head, body string, onClick func()) {
 // ---- broker lifecycle ----
 
 func (a *app) start() {
-	b, err := broker.Start(broker.Options{ConfigPath: a.cfgPath, Watch: true, OnReload: a.reloaded, OnProfile: a.profileChanged})
+	b, err := broker.Start(broker.Options{ConfigPath: a.cfgPath, Watch: true, OnReload: a.reloaded, OnProfile: a.profileChanged, OnSignIn: a.signIn})
 	a.mu.Lock()
 	a.b, a.startErr = b, err
 	a.mu.Unlock()
@@ -358,6 +358,10 @@ func (a *app) profileChanged(st supervisor.Status) {
 		}
 		a.notify(niifWarning, st.Profile+" exited", "Exit code "+code+". Click for its logs.", open)
 	}
+}
+
+func (a *app) signIn(connector, url string) {
+	a.notify(niifInfo, "Sign in to "+connector, "An agent needs "+connector+". Click to sign in in your browser.", func() { shellOpen(url) })
 }
 
 func (a *app) restart() {

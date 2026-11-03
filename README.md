@@ -50,6 +50,29 @@ other file with an `mcpServers` block. Add `--apply` to import, and
 `--switch` to also point those clients at the broker (each original is kept as
 `.bak-<time>`; for Claude Code it prints the `claude mcp` commands instead).
 
+## Remote servers that need a sign-in (OAuth)
+
+Hosted MCP servers such as Xero's want a person to sign in. Register an app with the
+service (a PKCE or "native" app; add `http://localhost:8765/oauth/callback` as its redirect
+URI), then:
+
+```yaml
+connectors:
+  xero:
+    url: https://api.xero.com/mcp/v1
+    oauth:
+      client_id: YOUR_CLIENT_ID
+      # client_secret: ${XERO_CLIENT_SECRET}   # confidential clients only, from env_file
+      scopes: [openid, offline_access, accounting.invoices.read, accounting.contacts.read]
+```
+
+`scopes` replaces what the server advertises, which is usually everything it can do, writes
+included. Run `mcp-broker signin xero`: the broker finds the endpoints from the server's
+metadata, opens the sign-in page, and saves the token in `oauth\xero.json` next to the
+config, refreshing it from then on. If an agent gets there first, `load_connector` answers
+at once with the sign-in link and the tray offers it as a notification. `mcp-broker status`
+shows connectors still waiting for a sign-in; `mcp-broker signout xero` forgets the token.
+
 ## Profiles: long-running apps
 
 A profile is an app the broker runs for agents and for you, such as ComfyUI:
@@ -100,6 +123,7 @@ Without the tray: `mcp-broker init`, `mcp-broker token create <agent> --save`,
 | `mcp-broker approvals [approve\|deny ID]` | list or decide pending approvals |
 | `mcp-broker token create\|list\|revoke` | agent tokens |
 | `mcp-broker import [--apply] [--switch]` | bring servers over from client configs |
+| `mcp-broker signin NAME` / `signout NAME` | sign in to an OAuth connector, or forget its token |
 | `mcp-broker init` / `validate` | create a starter config / check one |
 
 ## Building

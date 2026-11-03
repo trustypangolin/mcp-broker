@@ -87,6 +87,13 @@ connectors:
   d:
     command: x
     env: {API_KEY: hunter2hunter2}
+  e:
+    command: x
+    oauth: {client_id: abc}
+  f:
+    url: http://h/mcp
+    oauth: {client_secret: hunter3hunter3, redirect_url: "http://localhost:1/cb"}
+    headers: {Authorization: "Bearer ${T}"}
 `
 	_, err := Parse([]byte(bad), t.TempDir())
 	if err == nil {
@@ -103,12 +110,17 @@ connectors:
 		"connectors.b: set command or url",
 		"connectors.c.headers.Authorization",
 		"connectors.d.env.API_KEY",
+		"connectors.e: oauth only applies to remote connectors",
+		"connectors.f.oauth.client_id: required",
+		"connectors.f.oauth.client_secret",
+		"connectors.f.oauth.redirect_url",
+		"connectors.f: set oauth or an Authorization header",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error missing %q:\n%v", want, err)
 		}
 	}
-	if strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "literal") {
+	if strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "hunter3") || strings.Contains(err.Error(), "literal") {
 		t.Error("validation error leaked a secret value")
 	}
 }
@@ -210,6 +222,17 @@ func TestResolveRedactsSecrets(t *testing.T) {
 	}
 	if strings.Contains(red.String("sent strapi-tok-123"), "strapi-tok") {
 		t.Error("header token not redacted")
+	}
+
+	c = Connector{URL: "https://h/mcp", EnvFile: envFile, OAuth: &OAuth{ClientID: "cid", ClientSecret: "${FAL_KEY}", Scopes: []string{"read"}}}
+	if rc, err = c.Resolve(red); err != nil {
+		t.Fatal(err)
+	}
+	if rc.OAuth.ClientSecret != "fal-secret-value" || c.OAuth.ClientSecret != "${FAL_KEY}" {
+		t.Errorf("oauth secret: resolved %q, config %q", rc.OAuth.ClientSecret, c.OAuth.ClientSecret)
+	}
+	if e := c.Entry(); e.OAuth == nil || e.OAuth.ClientID != "cid" {
+		t.Error("Entry dropped oauth, so a dashboard save would lose it")
 	}
 }
 

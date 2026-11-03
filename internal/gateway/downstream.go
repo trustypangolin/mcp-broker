@@ -16,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/trustypangolin/mcp-broker/internal/config"
+	"github.com/trustypangolin/mcp-broker/internal/oauth"
 	"github.com/trustypangolin/mcp-broker/internal/proc"
 	"github.com/trustypangolin/mcp-broker/internal/version"
 )
@@ -89,10 +90,19 @@ func (d *downstream) connectLocked(ctx context.Context) error {
 
 	var transport mcp.Transport
 	if d.cn.Remote() {
-		transport = &mcp.StreamableClientTransport{
+		t := &mcp.StreamableClientTransport{
 			Endpoint:   r.URL,
 			HTTPClient: &http.Client{Transport: headerTransport{base: http.DefaultTransport, headers: r.Headers}},
 		}
+		if r.OAuth != nil {
+			if d.g.opts.OAuth == nil {
+				return fmt.Errorf("%s uses oauth, which this broker was started without", d.name)
+			}
+			if t.OAuthHandler, err = d.g.opts.OAuth.Handler(d.name, r.URL, r.OAuth); err != nil {
+				return fmt.Errorf("oauth for %s: %w", d.name, err)
+			}
+		}
+		transport = t
 	} else {
 		cmd := exec.Command(r.Command, r.Args...)
 		cmd.Dir = r.Cwd
@@ -130,6 +140,9 @@ func (d *downstream) connectLocked(ctx context.Context) error {
 		ProgressNotificationHandler: d.onProgress,
 	})
 	sess, err := client.Connect(ctx, transport, nil)
+	if sr := (*oauth.SignInRequired)(nil); errors.As(err, &sr) {
+		return sr // the whole message is the instruction; the wrapping only buries it
+	}
 	if err != nil {
 		return fmt.Errorf("connecting to %s: %w%s", d.name, err, d.stderrTail())
 	}

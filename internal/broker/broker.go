@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -24,6 +25,7 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/dashboard"
 	"github.com/trustypangolin/mcp-broker/internal/gateway"
 	"github.com/trustypangolin/mcp-broker/internal/identity"
+	"github.com/trustypangolin/mcp-broker/internal/oauth"
 	"github.com/trustypangolin/mcp-broker/internal/proc"
 	"github.com/trustypangolin/mcp-broker/internal/redact"
 	"github.com/trustypangolin/mcp-broker/internal/server"
@@ -45,6 +47,8 @@ type Options struct {
 	OnReload func(server.Reloaded, error)
 	// OnProfile, if set, hears about profile state changes.
 	OnProfile func(supervisor.Status)
+	// OnSignIn, if set, is told when an oauth connector waits for someone to sign in.
+	OnSignIn func(connector, url string)
 }
 
 // Broker is a running broker.
@@ -58,6 +62,7 @@ type Broker struct {
 	aud     *audit.Log
 	queue   *approval.Queue
 	gw      *gateway.Gateway
+	oauth   *oauth.Manager
 	sup     *supervisor.Supervisor
 	ident   *identity.Identifier
 	dash    *dashboard.Dashboard
@@ -144,17 +149,23 @@ func Start(opts Options) (b *Broker, err error) {
 		StateFile: filepath.Join(cfg.Dir, "runs.json"), OnChange: opts.OnProfile,
 	})
 	cleanup = append(cleanup, b.sup.Close)
+	b.oauth = oauth.New(oauth.Options{
+		Dir: filepath.Join(cfg.Dir, "oauth"), Redirect: callbackURL(cfg, ln.Addr()), Logger: b.log, OnSignIn: opts.OnSignIn,
+	})
 	b.gw = gateway.New(gateway.Options{
 		Config: cfg, Approvals: b.queue, Audit: b.aud, Redactor: b.red, Logger: b.log, LogDir: logDir,
-		DashboardURL: b.base + "/ui/", Supervisor: b.sup,
+		DashboardURL: b.base + "/ui/", Supervisor: b.sup, OAuth: b.oauth,
 	})
 	cleanup = append(cleanup, b.gw.Close)
 	b.ident = identity.New(cfg, store)
 	b.dash = dashboard.New(b)
 	handler := server.Handler(server.Options{
 		Identifier: b.ident, Gateway: b.gw, Audit: b.aud, Logger: b.log,
-		Admin: &server.AdminOptions{Control: b, Token: b.admin, Approvals: b.queue, Audit: b.aud},
-		Mount: b.dash.Mount,
+		Admin: &server.AdminOptions{Control: b, Token: b.admin, Approvals: b.queue, Audit: b.aud, OAuth: b},
+		Mount: func(mux *http.ServeMux) {
+			b.dash.Mount(mux)
+			mux.HandleFunc("GET "+oauth.CallbackPath, b.oauthCallback)
+		},
 	})
 	b.srv = &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -187,6 +198,73 @@ func localBase(cfg *config.Config, addr net.Addr) string {
 		return "https://" + net.JoinHostPort("localhost", port)
 	}
 	return "http://" + net.JoinHostPort("127.0.0.1", port)
+}
+
+// callbackURL is the default OAuth redirect. It names localhost rather than 127.0.0.1
+// because that is what authorization servers most often accept for native clients.
+func callbackURL(cfg *config.Config, addr net.Addr) string {
+	_, port, _ := net.SplitHostPort(addr.String())
+	scheme := "http"
+	if cfg.Server.TLS.CertFile != "" {
+		scheme = "https"
+	}
+	return scheme + "://" + net.JoinHostPort("localhost", port) + oauth.CallbackPath
+}
+
+// oauthCallback takes the browser's return from an authorization server. The browser runs
+// on this computer, so anything else is refused.
+func (b *Broker) oauthCallback(w http.ResponseWriter, r *http.Request) {
+	ap, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil || !ap.Addr().Unmap().IsLoopback() {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	b.oauth.Callback(w, r)
+}
+
+// SignIn implements server.OAuthControl: it starts signing in to an oauth connector and
+// returns the URL to open in a browser.
+func (b *Broker) SignIn(name string) (string, error) {
+	cn, err := b.oauthConnector(name)
+	if err != nil {
+		return "", err
+	}
+	r, err := cn.Resolve(b.red)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	return b.oauth.SignIn(ctx, name, r.URL, r.OAuth)
+}
+
+// SignOut implements server.OAuthControl: it forgets the connector's token and unloads it,
+// so its next use signs in again.
+func (b *Broker) SignOut(name string) error {
+	if _, err := b.oauthConnector(name); err != nil {
+		return err
+	}
+	if err := b.oauth.SignOut(name); err != nil {
+		return err
+	}
+	for _, c := range b.gw.Connectors() {
+		if c.Name == name {
+			b.gw.Unload(c.Key)
+		}
+	}
+	b.aud.Write(audit.Event{Kind: audit.KindStop, Connector: name, Detail: "signed out"})
+	return nil
+}
+
+func (b *Broker) oauthConnector(name string) (config.Connector, error) {
+	cn, ok := b.Config().Connectors[name]
+	switch {
+	case !ok:
+		return cn, fmt.Errorf("no connector %q", name)
+	case cn.OAuth == nil:
+		return cn, fmt.Errorf("connector %s does not use oauth", name)
+	}
+	return cn, nil
 }
 
 // Close stops serving, unloads every connector and closes the logs.

@@ -79,12 +79,22 @@ type Status struct {
 	Agents     []string            `json:"agents"`
 }
 
+// OAuthControl signs the broker in to and out of oauth connectors.
+type OAuthControl interface {
+	// SignIn starts a sign-in and returns the URL to open in a browser.
+	SignIn(connector string) (string, error)
+	// SignOut forgets the connector's token.
+	SignOut(connector string) error
+}
+
 // AdminOptions configures the admin API.
 type AdminOptions struct {
 	Control   Control
 	Token     string
 	Approvals *approval.Queue
 	Audit     *audit.Log
+	// OAuth, if set, adds the sign-in endpoints.
+	OAuth OAuthControl
 }
 
 // MountAdmin adds the admin API to mux. Approvals and status are reachable from any allowed
@@ -102,6 +112,29 @@ func MountAdmin(mux *http.ServeMux, o AdminOptions) {
 	mux.Handle("GET /admin/profiles/{name}/logs", a.guard(anyAllowed, a.profileLogs))
 	mux.Handle("GET /admin/profiles/{name}/plan", a.guard(adminOnly, a.profilePlan))
 	mux.Handle("POST /admin/profiles/{name}/{action}", a.guard(adminOnly, a.profileAction))
+	if o.OAuth != nil {
+		mux.Handle("POST /admin/oauth/{name}/signin", a.guard(adminOnly, a.signIn))
+		mux.Handle("POST /admin/oauth/{name}/signout", a.guard(adminOnly, a.signOut))
+	}
+}
+
+func (a *admin) signIn(w http.ResponseWriter, r *http.Request) {
+	url, err := a.o.OAuth.SignIn(r.PathValue("name"))
+	if err != nil {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"url": url})
+}
+
+func (a *admin) signOut(w http.ResponseWriter, r *http.Request) {
+	if err := a.o.OAuth.SignOut(r.PathValue("name")); err != nil {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		writeJSON(w, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 type admin struct{ o AdminOptions }

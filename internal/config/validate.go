@@ -69,6 +69,27 @@ func (c *Config) Validate() error {
 			if len(cn.Headers) > 0 {
 				add("%s: headers only apply to remote connectors", p)
 			}
+			if cn.OAuth != nil {
+				add("%s: oauth only applies to remote connectors", p)
+			}
+		}
+		if o := cn.OAuth; o != nil {
+			if o.ClientID == "" {
+				add("%s.oauth.client_id: required (register a client with the server's authorization server)", p)
+			}
+			if o.ClientSecret != "" && !strings.Contains(o.ClientSecret, "${") {
+				add("%s.oauth.client_secret: secret values belong in env_file; reference ${NAME}", p)
+			}
+			if o.RedirectURL != "" {
+				if u, err := url.Parse(o.RedirectURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Path != "/oauth/callback" {
+					add("%s.oauth.redirect_url: must be an http(s) URL ending in /oauth/callback on this broker", p)
+				}
+			}
+			for k := range cn.Headers {
+				if strings.EqualFold(k, "Authorization") {
+					add("%s: set oauth or an Authorization header, not both", p)
+				}
+			}
 		}
 		if cn.Instance != "shared" && cn.Instance != "per_agent" {
 			add("%s.instance: %q is not shared or per_agent", p, cn.Instance)

@@ -103,9 +103,24 @@ type Connector struct {
 	EnvFile     string            `yaml:"env_file"`
 	URL         string            `yaml:"url"`
 	Headers     map[string]string `yaml:"headers"`
+	OAuth       *OAuth            `yaml:"oauth"`
 	IdleUnload  time.Duration     `yaml:"idle_unload"`
 	Instance    string            `yaml:"instance"`
 	ToolClasses map[string]Class  `yaml:"tool_classes"`
+}
+
+// OAuth signs the broker in to a remote connector with the authorization code flow (PKCE).
+// The server's metadata supplies the endpoints; the client is one registered with that
+// server's authorization server, since few offer dynamic registration.
+type OAuth struct {
+	ClientID string `json:"client_id" yaml:"client_id,omitempty"`
+	// ClientSecret is only for confidential clients; reference ${NAME} from env_file.
+	ClientSecret string `json:"client_secret,omitempty" yaml:"client_secret,omitempty"`
+	// Scopes replaces the scopes the server advertises, which are often all of them.
+	Scopes []string `json:"scopes,omitempty" yaml:"scopes,omitempty,flow"`
+	// RedirectURL defaults to http://localhost:<port>/oauth/callback on this broker; it
+	// must match the one registered for the client exactly.
+	RedirectURL string `json:"redirect_url,omitempty" yaml:"redirect_url,omitempty"`
 }
 
 // Remote reports whether the connector is reached over HTTP rather than spawned.

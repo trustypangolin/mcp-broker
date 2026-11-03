@@ -23,6 +23,7 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/audit"
 	"github.com/trustypangolin/mcp-broker/internal/config"
 	"github.com/trustypangolin/mcp-broker/internal/identity"
+	"github.com/trustypangolin/mcp-broker/internal/oauth"
 	"github.com/trustypangolin/mcp-broker/internal/policy"
 	"github.com/trustypangolin/mcp-broker/internal/redact"
 	"github.com/trustypangolin/mcp-broker/internal/supervisor"
@@ -40,6 +41,8 @@ type Options struct {
 	Logger    *slog.Logger
 	// Supervisor runs profiles; nil means no profile tools work.
 	Supervisor *supervisor.Supervisor
+	// OAuth signs in to connectors that use oauth; nil means they cannot connect.
+	OAuth *oauth.Manager
 	// DashboardURL is shown to agents whose approval must happen out of band.
 	DashboardURL string
 	// LogDir receives one stderr log per local connector; empty disables.
@@ -127,7 +130,15 @@ type Connector struct {
 	Tools  int      `json:"tools"`
 	PID    int      `json:"pid,omitempty"`
 	Remote bool     `json:"remote,omitempty"`
+	Auth   string   `json:"auth,omitempty"`   // OAuth sign-in state, for connectors that use it
 	Stderr []string `json:"stderr,omitempty"` // recent lines, redacted
+}
+
+func (g *Gateway) authState(name string, cn config.Connector) string {
+	if cn.OAuth == nil || g.opts.OAuth == nil {
+		return ""
+	}
+	return g.opts.OAuth.State(name)
 }
 
 // Connectors lists every configured connector, with the state of each instance that has
@@ -144,12 +155,13 @@ func (g *Gateway) Connectors() []Connector {
 	for _, name := range slices.Sorted(maps.Keys(cfg.Connectors)) {
 		ds := byName[name]
 		if len(ds) == 0 {
-			out = append(out, Connector{Key: name, Name: name, Remote: cfg.Connectors[name].Remote()})
+			cn := cfg.Connectors[name]
+			out = append(out, Connector{Key: name, Name: name, Remote: cn.Remote(), Auth: g.authState(name, cn)})
 			continue
 		}
 		slices.SortFunc(ds, func(a, b *downstream) int { return strings.Compare(a.key, b.key) })
 		for _, d := range ds {
-			c := Connector{Key: d.key, Name: name, Loaded: d.loaded(), Remote: d.cn.Remote(), Stderr: d.recentStderr(20)}
+			c := Connector{Key: d.key, Name: name, Loaded: d.loaded(), Remote: d.cn.Remote(), Auth: g.authState(name, d.cn), Stderr: d.recentStderr(20)}
 			_, tools := d.snapshot()
 			c.Tools = len(tools)
 			if p := d.process(); p != nil {

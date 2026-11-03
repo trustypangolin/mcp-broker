@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -136,12 +137,54 @@ func cmdStatus(args []string, stdout, stderr io.Writer) error {
 		if c.Loaded {
 			state = "loaded"
 		}
+		if c.Auth != "" && c.Auth != "signed in" {
+			state += ", " + c.Auth
+		}
 		if c.PID != 0 {
 			pid = fmt.Sprint(c.PID)
 		}
 		fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", c.Key, state, c.Tools, pid)
 	}
 	return w.Flush()
+}
+
+// cmdSignIn signs the broker in to an oauth connector (signin) or forgets its token (signout).
+func cmdSignIn(cmd string, args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.Usage = func() { fmt.Fprintf(stderr, "usage: mcp-broker %s [flags] CONNECTOR\n", cmd); fs.PrintDefaults() }
+	cfgFlag := fs.String("config", "", "config file")
+	noOpen := fs.Bool("print", false, "print the sign-in link instead of opening a browser")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
+		fs.Usage()
+		return errUsage
+	}
+	name := fs.Arg(0)
+	do, err := adminClient(*cfgFlag)
+	if err != nil {
+		return err
+	}
+	resp, err := do(http.MethodPost, "/admin/oauth/"+url.PathEscape(name)+"/"+cmd, nil)
+	if err != nil {
+		return err
+	}
+	var out struct{ URL string }
+	if err := decodeOK(resp, &out); err != nil {
+		return err
+	}
+	if cmd == "signout" {
+		fmt.Fprintf(stdout, "signed out of %s; its next use asks for a sign-in\n", name)
+		return nil
+	}
+	if *noOpen {
+		fmt.Fprintln(stdout, out.URL)
+		return nil
+	}
+	if err := openBrowser(out.URL); err != nil {
+		return fmt.Errorf("opening a browser: %w (run with --print for the link)", err)
+	}
+	fmt.Fprintf(stdout, "opened the sign-in page for %s; `mcp-broker status` shows when it is done\n", name)
+	return nil
 }
 
 func cmdDashboard(args []string, stdout, stderr io.Writer) error {

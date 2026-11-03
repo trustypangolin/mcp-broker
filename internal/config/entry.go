@@ -17,6 +17,7 @@ type ConnectorEntry struct {
 	EnvFile     string            `json:"env_file" yaml:"env_file,omitempty"`
 	URL         string            `json:"url" yaml:"url,omitempty"`
 	Headers     map[string]string `json:"headers" yaml:"headers,omitempty"`
+	OAuth       *OAuth            `json:"oauth,omitempty" yaml:"oauth,omitempty"`
 	IdleUnload  string            `json:"idle_unload" yaml:"idle_unload,omitempty"`
 	Instance    string            `json:"instance" yaml:"instance,omitempty"`
 	ToolClasses map[string]string `json:"tool_classes" yaml:"tool_classes,omitempty"`
@@ -26,7 +27,7 @@ type ConnectorEntry struct {
 func (c Connector) Entry() ConnectorEntry {
 	e := ConnectorEntry{
 		Description: c.Description, Tags: c.Tags, Command: c.Command, Args: c.Args, Cwd: c.Cwd,
-		Env: c.Env, EnvFile: c.EnvFile, URL: c.URL, Headers: c.Headers, IdleUnload: FormatDuration(c.IdleUnload),
+		Env: c.Env, EnvFile: c.EnvFile, URL: c.URL, Headers: c.Headers, OAuth: c.OAuth, IdleUnload: FormatDuration(c.IdleUnload),
 	}
 	if c.Instance != "shared" {
 		e.Instance = c.Instance
