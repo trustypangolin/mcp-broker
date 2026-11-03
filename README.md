@@ -24,7 +24,8 @@ Status: early development.
      The agent's card shows the command to put in the client config.
 4. Point each client at the shim instead of at the servers themselves:
    - Claude Code: `claude mcp add -s user broker -- C:\Tools\mcp-broker\mcp-broker.exe connect --agent claude-code`
-   - Claude Desktop (`%APPDATA%\Claude\claude_desktop_config.json`):
+   - Claude Desktop (`%APPDATA%\Claude\claude_desktop_config.json`; the Microsoft Store
+     build reads `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\` instead):
      `"broker": {"command": "C:\\Tools\\mcp-broker\\mcp-broker.exe", "args": ["connect", "--agent", "claude-desktop"]}`
    - VS Code (`mcp.json`):
      `"broker": {"type": "stdio", "command": "C:\\Tools\\mcp-broker\\mcp-broker.exe", "args": ["connect", "--agent", "vscode"]}`

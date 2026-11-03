@@ -53,13 +53,26 @@ func DefaultSources() []Source {
 		}
 	}
 	if dir, err := os.UserConfigDir(); err == nil {
-		add(ClaudeDesktop, filepath.Join(dir, "Claude", "claude_desktop_config.json"), "mcpServers")
+		add(ClaudeDesktop, claudeDesktopConfig(dir, os.Getenv("LOCALAPPDATA")), "mcpServers")
 		add(VSCode, filepath.Join(dir, "Code", "User", "mcp.json"), "servers")
 	}
 	if home, err := os.UserHomeDir(); err == nil {
 		add(ClaudeCode, filepath.Join(home, ".claude.json"), "mcpServers")
 	}
 	return out
+}
+
+// claudeDesktopConfig finds the config Claude Desktop actually reads. The Microsoft Store
+// build is an MSIX package whose %APPDATA% is redirected into the package's LocalCache, so
+// when that copy exists the one in roaming is stale and must not be imported or switched.
+func claudeDesktopConfig(roaming, localAppData string) string {
+	if localAppData != "" {
+		pattern := filepath.Join(localAppData, "Packages", "Claude_*", "LocalCache", "Roaming", "Claude", "claude_desktop_config.json")
+		if m, _ := filepath.Glob(pattern); len(m) > 0 {
+			return m[0]
+		}
+	}
+	return filepath.Join(roaming, "Claude", "claude_desktop_config.json")
 }
 
 // SourceFor guesses what kind of client config path is.

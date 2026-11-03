@@ -127,6 +127,21 @@ func TestPlanSystemVars(t *testing.T) {
 	}
 }
 
+func TestClaudeDesktopConfig(t *testing.T) {
+	dir := t.TempDir()
+	roaming, local := filepath.Join(dir, "Roaming"), filepath.Join(dir, "Local")
+	want := filepath.Join(roaming, "Claude", "claude_desktop_config.json")
+	if got := claudeDesktopConfig(roaming, local); got != want {
+		t.Errorf("no package: got %s, want %s", got, want)
+	}
+	pkg := filepath.Join(local, "Packages", "Claude_pzs8sxrjxfjjc", "LocalCache", "Roaming", "Claude")
+	os.MkdirAll(pkg, 0o700)
+	os.WriteFile(filepath.Join(pkg, "claude_desktop_config.json"), []byte("{}"), 0o600)
+	if got, want := claudeDesktopConfig(roaming, local), filepath.Join(pkg, "claude_desktop_config.json"); got != want {
+		t.Errorf("store build: got %s, want %s", got, want)
+	}
+}
+
 func TestGuessTags(t *testing.T) {
 	for _, c := range []struct {
 		name, cmd string
