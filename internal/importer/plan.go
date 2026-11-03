@@ -88,6 +88,15 @@ func guessTags(name string, s Server) []string {
 	return out
 }
 
+// systemVars are Windows location variables. They are not secrets, and the broker runs as
+// the same user as the client, so an import writes their values straight into broker.yaml
+// instead of copying them into every connector's env file.
+var systemVars = map[string]bool{
+	"APPDATA": true, "LOCALAPPDATA": true, "USERPROFILE": true, "HOMEDRIVE": true, "HOMEPATH": true,
+	"PUBLIC": true, "PROGRAMDATA": true, "PROGRAMFILES": true, "PROGRAMW6432": true,
+	"COMMONPROGRAMFILES": true, "SYSTEMDRIVE": true, "SYSTEMROOT": true, "WINDIR": true,
+}
+
 var envRef = regexp.MustCompile(`\$\{(?:env:)?([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}`)
 var inputRef = regexp.MustCompile(`\$\{input:[^}]+\}`)
 
@@ -153,6 +162,13 @@ func translate(s string, vars map[string]string, getenv func(string) string, not
 	for _, m := range envRef.FindAllStringSubmatchIndex(s, -1) {
 		b.WriteString(escapeDollar(s[last:m[0]]))
 		name := s[m[2]:m[3]]
+		if systemVars[strings.ToUpper(name)] {
+			if v := getenv(name); v != "" {
+				b.WriteString(escapeDollar(v))
+				last = m[1]
+				continue
+			}
+		}
 		if _, ok := vars[name]; !ok {
 			v := getenv(name)
 			if v == "" && m[4] >= 0 {

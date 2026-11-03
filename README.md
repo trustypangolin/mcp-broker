@@ -43,7 +43,9 @@ on save.
 
 Already have servers set up in Claude Desktop, Claude Code or VS Code? `mcp-broker import`
 shows what it would bring over (secrets go to `secrets\<name>.env`, never `broker.yaml`;
-`npx mcp-remote` bridges become direct HTTP connectors). Add `--apply` to import, and
+Windows location variables such as `${LOCALAPPDATA}` are written in as plain paths;
+`npx mcp-remote` bridges become direct HTTP connectors). Use `--from PATH` to read any
+other file with an `mcpServers` block. Add `--apply` to import, and
 `--switch` to also point those clients at the broker (each original is kept as
 `.bak-<time>`; for Claude Code it prints the `claude mcp` commands instead).
 

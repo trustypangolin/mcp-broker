@@ -105,6 +105,28 @@ func TestPlan(t *testing.T) {
 	}
 }
 
+// Windows location variables are written into broker.yaml, not carried as secrets; other
+// references still go to the env file, and an unset location variable falls back to that.
+func TestPlanSystemVars(t *testing.T) {
+	f := setup(t)
+	env := map[string]string{"LOCALAPPDATA": `C:\Users\u\AppData\Local`, "PROJ": `D:\proj`}
+	s := Server{Name: "craft", Type: "stdio", Command: `${LOCALAPPDATA}\Craft\craft-cli.exe`,
+		Args: []string{"mcp", "--root", "${PROJ}", "${localappdata}", "${APPDATA}"}}
+	it := Plan(f.cfg, []Server{s}, Options{Getenv: func(n string) string { return env[strings.ToUpper(n)] }})[0]
+	if it.Entry.Command != `C:\Users\u\AppData\Local\Craft\craft-cli.exe` {
+		t.Errorf("command: %q", it.Entry.Command)
+	}
+	if want := []string{"mcp", "--root", "${PROJ}", `C:\Users\u\AppData\Local`, "${APPDATA}"}; !slices.Equal(it.Entry.Args, want) {
+		t.Errorf("args: %q", it.Entry.Args)
+	}
+	if _, ok := it.Secrets["LOCALAPPDATA"]; ok || it.Secrets["PROJ"] != `D:\proj` {
+		t.Errorf("secrets: %v", it.Secrets)
+	}
+	if _, ok := it.Secrets["APPDATA"]; !ok {
+		t.Errorf("unset APPDATA should still go to the env file: %v", it.Secrets)
+	}
+}
+
 func TestPlanConflictAndOverwrite(t *testing.T) {
 	f := setup(t)
 	cn := f.cfg.Connectors["excel-live"]
