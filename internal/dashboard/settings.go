@@ -31,6 +31,9 @@ type connectorView struct {
 	Instances []gateway.Connector   `json:"instances"`
 	VisibleTo []string              `json:"visible_to"`
 	Issues    []string              `json:"issues,omitempty"`
+	// AWSProfile is set for connectors running AWS's proxy, so the forms can offer a
+	// profile picker.
+	AWSProfile string `json:"aws_profile,omitempty"`
 }
 
 func (d *Dashboard) listConnectors(w http.ResponseWriter, _ *http.Request) {
@@ -47,6 +50,9 @@ func (d *Dashboard) listConnectors(w http.ResponseWriter, _ *http.Request) {
 	out := []connectorView{}
 	for _, name := range slices.Sorted(maps.Keys(cfg.Connectors)) {
 		v := connectorView{Name: name, Def: cfg.Connectors[name].Entry(), Instances: []gateway.Connector{}, VisibleTo: []string{}, Issues: issues[name]}
+		if slices.ContainsFunc(cfg.Connectors[name].Args, func(a string) bool { return strings.HasPrefix(a, "mcp-proxy-for-aws") }) {
+			v.AWSProfile = awsProfileOf(cfg.Connectors[name])
+		}
 		for _, c := range st.Connectors {
 			if c.Name == name {
 				v.Instances = append(v.Instances, c)
@@ -108,6 +114,17 @@ func (d *Dashboard) putConnector(w http.ResponseWriter, r *http.Request) {
 	}
 	if (f.Command == "") == (f.URL == "") {
 		jsonError(w, http.StatusBadRequest, "set either a command (local server) or a URL (remote server)")
+		return
+	}
+	cfg := d.b.Config()
+	// ?new=1 is the add and duplicate forms: never replace an existing entry.
+	if _, exists := cfg.Connectors[name]; exists && r.URL.Query().Get("new") != "" {
+		jsonError(w, http.StatusConflict, "a connector named "+name+" already exists; pick another name")
+		return
+	}
+	if other := cfg.SameServerAs(f, name); other != "" {
+		jsonError(w, http.StatusConflict, "this is the same server as "+other+
+			" (same command, arguments, working directory and environment, or same URL and headers); change what differs, such as an argument or env value")
 		return
 	}
 	d.apply(w, "connectors", name, f)

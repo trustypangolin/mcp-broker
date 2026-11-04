@@ -407,3 +407,45 @@ func TestAttachAWSProfile(t *testing.T) {
 		t.Errorf("unknown profile: %d", st)
 	}
 }
+
+func TestDuplicateConnector(t *testing.T) {
+	f := newFixture(t, base)
+	f.signIn()
+	// An exact copy of fake under a new name is refused, naming the original.
+	st, out := f.do("PUT", "/ui/api/connectors/fake-copy?new=1", config.ConnectorEntry{Command: "fake.exe", Description: "copy"}, nil)
+	if st != http.StatusConflict || !strings.Contains(fmt.Sprint(out["error"]), "same server as fake") {
+		t.Fatalf("exact copy: %d %v", st, out)
+	}
+	// A new connector never replaces an existing name.
+	if st, out := f.do("PUT", "/ui/api/connectors/fake?new=1", config.ConnectorEntry{Command: "other.exe"}, nil); st != http.StatusConflict {
+		t.Fatalf("new over existing: %d %v", st, out)
+	}
+	// A copy that differs in an argument is a different server.
+	if st, out := f.do("PUT", "/ui/api/connectors/fake-2?new=1", config.ConnectorEntry{Command: "fake.exe", Args: []string{"--two"}}, nil); st != 200 {
+		t.Fatalf("different copy: %d %v", st, out)
+	}
+	// Editing a connector in place isn't a duplicate of itself, but editing it into
+	// another one is.
+	if st, out := f.do("PUT", "/ui/api/connectors/fake", config.ConnectorEntry{Command: "fake.exe", Description: "edited"}, nil); st != 200 {
+		t.Fatalf("edit in place: %d %v", st, out)
+	}
+	if st, _ := f.do("PUT", "/ui/api/connectors/fake-2", config.ConnectorEntry{Command: "fake.exe"}, nil); st != http.StatusConflict {
+		t.Fatalf("edit into a duplicate: %d", st)
+	}
+}
+
+func TestAWSProfileOf(t *testing.T) {
+	for _, tc := range []struct {
+		c    config.Connector
+		want string
+	}{
+		{config.Connector{Args: []string{"p", "--profile", "a"}, Env: map[string]string{"AWS_PROFILE": "stale"}}, "a"},
+		{config.Connector{Args: []string{"p", "--profile=b"}}, "b"},
+		{config.Connector{Env: map[string]string{"AWS_PROFILE": "c"}}, "c"},
+		{config.Connector{Args: []string{"p"}}, ""},
+	} {
+		if got := awsProfileOf(tc.c); got != tc.want {
+			t.Errorf("%+v: %q, want %q", tc.c, got, tc.want)
+		}
+	}
+}

@@ -240,9 +240,16 @@ func (c *Config) Check() []Issue {
 	}
 	red := redact.New()
 
+	firstOf := map[string]string{} // launch key -> first connector with it
 	for _, name := range sortedKeys(c.Connectors) {
 		cn := c.Connectors[name]
 		p := "connectors." + name
+		key := cn.Entry().LaunchKey()
+		if first, dup := firstOf[key]; dup {
+			issue(true, p, "same server as %s: two connectors start the same thing", first)
+		} else {
+			firstOf[key] = name
+		}
 		r, err := cn.Resolve(red)
 		if err != nil {
 			issue(false, p, "%s", red.String(err.Error()))

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os/exec"
 	"regexp"
+	"strings"
 
 	"github.com/trustypangolin/mcp-broker/internal/awsconfig"
 	"github.com/trustypangolin/mcp-broker/internal/config"
@@ -36,6 +37,20 @@ var awsReadTools = []string{"aws___run_script", "aws___get_presigned_url"}
 
 var notName = regexp.MustCompile(`[^A-Za-z0-9_.-]+`)
 
+// awsProfileOf returns the AWS profile a connector runs as: the proxy's --profile, else
+// AWS_PROFILE in its environment, else "".
+func awsProfileOf(c config.Connector) string {
+	for i, a := range c.Args {
+		if a == "--profile" && i+1 < len(c.Args) {
+			return c.Args[i+1]
+		}
+		if v, ok := strings.CutPrefix(a, "--profile="); ok {
+			return v
+		}
+	}
+	return c.Env["AWS_PROFILE"]
+}
+
 type awsProfileView struct {
 	awsconfig.Profile
 	Attached string `json:"attached,omitempty"` // connector name, if attached
@@ -53,7 +68,7 @@ func (d *Dashboard) listAWS(w http.ResponseWriter, _ *http.Request) {
 	for _, p := range ps {
 		v := awsProfileView{Profile: p}
 		for name, c := range cfg.Connectors {
-			if c.Env["AWS_PROFILE"] == p.Name {
+			if awsProfileOf(c) == p.Name {
 				v.Attached = name
 				v.ReadOnly = c.ToolClasses["aws___run_script"] == config.Read
 			}
@@ -92,7 +107,7 @@ func (d *Dashboard) attachAWS(w http.ResponseWriter, r *http.Request) {
 	cfg := d.b.Config()
 	name := ""
 	for n, c := range cfg.Connectors {
-		if c.Env["AWS_PROFILE"] == profile {
+		if awsProfileOf(c) == profile {
 			name = n
 		}
 	}

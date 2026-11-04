@@ -149,3 +149,48 @@ func TestSetFieldsGroup(t *testing.T) {
 		t.Errorf("quoted group: %v\n%s", err, out)
 	}
 }
+
+func TestLaunchKey(t *testing.T) {
+	base := ConnectorEntry{Command: "uvx", Args: []string{"proxy", "--profile", "a"}, Env: map[string]string{"X": "1"}}
+	same := base
+	same.Description, same.Group, same.Tags, same.IdleUnload = "other", "G", []string{"t"}, "5m"
+	same.ToolClasses = map[string]string{"x": "read"}
+	if base.LaunchKey() != same.LaunchKey() {
+		t.Error("labels and policy changed the key")
+	}
+	for _, diff := range []ConnectorEntry{
+		{Command: "uvx", Args: []string{"proxy", "--profile", "b"}, Env: map[string]string{"X": "1"}},
+		{Command: "uvx", Args: []string{"proxy", "--profile", "a"}, Env: map[string]string{"X": "2"}},
+		{Command: "uvx", Args: []string{"proxy", "--profile", "a"}, Env: map[string]string{"X": "1"}, Cwd: "elsewhere"},
+		{Command: "uvx", Args: []string{"proxy", "--profile", "a"}, Env: map[string]string{"X": "1"}, EnvFile: "e.env"},
+	} {
+		if diff.LaunchKey() == base.LaunchKey() {
+			t.Errorf("%+v keyed the same as the original", diff)
+		}
+	}
+	if (ConnectorEntry{URL: "https://Host.example/mcp/"}).LaunchKey() != (ConnectorEntry{URL: "https://host.example/mcp"}).LaunchKey() {
+		t.Error("URL case or trailing slash made a difference")
+	}
+	if (ConnectorEntry{URL: "https://h/mcp", Headers: map[string]string{"A": "1"}}).LaunchKey() == (ConnectorEntry{URL: "https://h/mcp"}).LaunchKey() {
+		t.Error("headers ignored")
+	}
+	if (ConnectorEntry{Args: []string{}, Command: "x"}).LaunchKey() != (ConnectorEntry{Command: "x"}).LaunchKey() {
+		t.Error("empty and missing args differ")
+	}
+}
+
+func TestCheckWarnsDuplicateConnectors(t *testing.T) {
+	cfg, err := Parse([]byte("connectors:\n  a: {command: x.exe}\n  b: {command: x.exe, description: again}\n  c: {command: y.exe}\n"), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dups []string
+	for _, i := range cfg.Check() {
+		if strings.Contains(i.Msg, "same server") {
+			dups = append(dups, i.String())
+		}
+	}
+	if len(dups) != 1 || !strings.Contains(dups[0], "connectors.b") || !strings.Contains(dups[0], "same server as a") {
+		t.Errorf("issues: %v", dups)
+	}
+}

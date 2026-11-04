@@ -394,6 +394,7 @@ pages.connectors = async (main) => {
         c.instances.map((i) => h("pre", {}, (i.stderr || []).join("\n")))),
       h("div", { class: "row", style: "margin-top:8px" },
         h("button", { onclick: () => editConnector(c.name, def, data.classes, items) }, "Edit"),
+        h("button", { onclick: () => editConnector(null, def, data.classes, items, { from: c.name, awsProfile: c.aws_profile }) }, "Duplicate"),
         h("button", { onclick: () => groupDialog("connectors", items, nameOf, { move: c.name }) }, "Group…"),
         h("button", { class: "danger", onclick: (ev) => removeConnector(ev.target, c.name) }, "Remove"))]);
   };
@@ -405,11 +406,19 @@ pages.connectors = async (main) => {
   fill(main, head, tools, cards.length ? cards : h("div", { class: "card empty" }, "No connectors yet."));
 };
 
-function editConnector(name, def, classes, items) {
+// editConnector edits a connector (name set), adds one (name null), or duplicates one
+// (opts.from: the source; def is its definition). Saving a new one never replaces an
+// existing name, and the server refuses one that launches the same server as another.
+function editConnector(name, def, classes, items, opts = {}) {
   const remote = !!def.url;
   const dl = groupList(items || []);
+  const taken = new Set((items || []).map((i) => i.name));
+  const unique = (base) => {
+    if (!taken.has(base)) return base;
+    for (let i = 2; ; i++) if (!taken.has(base + "-" + i)) return base + "-" + i;
+  };
   const f = {
-    name: h("input", { value: name || "", disabled: !!name, placeholder: "excel-live" }),
+    name: h("input", { value: name || (opts.from ? unique(opts.from + "-copy") : ""), disabled: !!name, placeholder: "excel-live" }),
     description: h("input", { value: def.description || "" }),
     tags: h("input", { value: (def.tags || []).join(", "), placeholder: "office, files" }),
     group: h("input", { value: def.group || "", list: dl.id, placeholder: "none" }),
@@ -435,8 +444,37 @@ function editConnector(name, def, classes, items) {
   const sync = () => { local.hidden = f.kind.value !== "local"; rem.hidden = f.kind.value === "local"; };
   f.kind.addEventListener("change", sync);
   sync();
-  dialog(name ? "Edit " + name : "Add connector",
+  // Duplicating an AWS connector: picking another profile rewrites it everywhere it
+  // appears (--profile, AWS_PROFILE, the region metadata, the name and description).
+  let awsPick = null;
+  if (opts.awsProfile) {
+    let cur = opts.awsProfile;
+    awsPick = h("select", {}, h("option", { value: cur }, cur + " (loading…)"));
+    api("GET", "aws").then((data) => {
+      const byName = Object.fromEntries(data.profiles.map((p) => [p.name, p]));
+      fill(awsPick, data.profiles.map((p) => h("option", { value: p.name, selected: p.name === cur, disabled: !!p.attached && p.name !== cur },
+        p.name + " (" + p.kind + (p.region ? ", " + p.region : "") + ")" + (p.attached ? " — attached as " + p.attached : ""))));
+      awsPick.addEventListener("change", () => {
+        const next = byName[awsPick.value];
+        const args = lines(f.args.value);
+        for (let i = 0; i < args.length; i++) {
+          if (args[i] === "--profile" && i + 1 < args.length) args[i + 1] = next.name;
+          else if (args[i].startsWith("AWS_REGION=") && next.region) args[i] = "AWS_REGION=" + next.region;
+        }
+        f.args.value = args.join("\n");
+        const env = kv(f.env.value) || {};
+        if ("AWS_PROFILE" in env) env.AWS_PROFILE = next.name;
+        f.env.value = kvText(env);
+        f.name.value = unique("aws-" + next.name.replace(/[^A-Za-z0-9_.-]+/g, "-"));
+        f.description.value = f.description.value.split(cur).join(next.name);
+        cur = next.name;
+      });
+    }).catch((e) => toast(e.message, true));
+  }
+  dialog(name ? "Edit " + name : opts.from ? "Duplicate " + opts.from : "Add connector",
     h("div", {},
+      opts.from && h("p", { class: "hint" }, "A copy of ", h("b", {}, opts.from), ". Change what makes it a different server: an argument, an env value or the URL. An exact copy of an existing server is refused."),
+      awsPick && field("AWS profile", awsPick, "Profiles already attached are greyed out."),
       h("div", { class: "grid2" }, field("Name", f.name), field("Tags", f.tags, "Roles can select connectors by tag:<name>.")),
       dl.el, field("Group", f.group, "A heading on this page only; it doesn't change what agents see."),
       field("Description", f.description, "Shown to agents in list_connectors."),
@@ -466,7 +504,7 @@ function editConnector(name, def, classes, items) {
           instance: f.instance.value || undefined,
           tool_classes: kv(f.tool_classes.value),
         };
-        toast(reloadSummary(await api("PUT", "connectors/" + encodeURIComponent(n), body)));
+        toast(reloadSummary(await api("PUT", "connectors/" + encodeURIComponent(n) + (name ? "" : "?new=1"), body)));
         close();
         route();
       }) }, "Save and apply"),

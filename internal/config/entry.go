@@ -1,6 +1,12 @@
 package config
 
 import (
+	"encoding/json"
+	"maps"
+	"net/url"
+	"path/filepath"
+	"runtime"
+	"slices"
 	"strings"
 	"time"
 )
@@ -40,6 +46,69 @@ func (c Connector) Entry() ConnectorEntry {
 		}
 	}
 	return e
+}
+
+// LaunchKey identifies the server an entry starts or reaches: two entries with the same
+// key are the same MCP server under different names. Labels and policy (name,
+// description, tags, group, tool classes, idle unload, instance) don't count. Paths and
+// hosts compare case-insensitively on Windows, where they are.
+func (e ConnectorEntry) LaunchKey() string {
+	norm := func(s string) string {
+		s = strings.TrimSpace(s)
+		if runtime.GOOS == "windows" {
+			s = strings.ToLower(filepath.Clean(strings.ReplaceAll(s, "/", `\`)))
+			s = strings.TrimSuffix(s, ".exe")
+		}
+		return s
+	}
+	k := struct {
+		Command, Cwd, EnvFile, URL string
+		Args                       []string
+		Env, Headers               map[string]string
+		Client                     string
+	}{Args: e.Args, Env: e.Env, Headers: e.Headers}
+	if e.URL != "" {
+		k.URL = strings.TrimRight(strings.TrimSpace(e.URL), "/")
+		if u, err := url.Parse(k.URL); err == nil {
+			u.Host = strings.ToLower(u.Host)
+			u.Scheme = strings.ToLower(u.Scheme)
+			k.URL = u.String()
+		}
+		if e.OAuth != nil {
+			k.Client = e.OAuth.ClientID
+		}
+	} else {
+		k.Command, k.Cwd = norm(e.Command), e.Cwd
+		if k.Cwd != "" {
+			k.Cwd = norm(k.Cwd)
+		}
+	}
+	if e.EnvFile != "" {
+		k.EnvFile = norm(e.EnvFile)
+	}
+	if len(k.Args) == 0 {
+		k.Args = nil
+	}
+	if len(k.Env) == 0 {
+		k.Env = nil
+	}
+	if len(k.Headers) == 0 {
+		k.Headers = nil
+	}
+	b, _ := json.Marshal(k) // maps marshal with sorted keys
+	return string(b)
+}
+
+// SameServerAs returns the name of a connector in cfg, other than except, that launches
+// the same server as e, or "".
+func (cfg *Config) SameServerAs(e ConnectorEntry, except string) string {
+	key := e.LaunchKey()
+	for _, name := range slices.Sorted(maps.Keys(cfg.Connectors)) {
+		if name != except && cfg.Connectors[name].Entry().LaunchKey() == key {
+			return name
+		}
+	}
+	return ""
 }
 
 // FormatDuration prints a duration the way people write it in YAML: 30m, not 30m0s.
