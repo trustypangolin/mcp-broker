@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -366,5 +368,41 @@ func TestSetGroup(t *testing.T) {
 		if st, _ := f.do("POST", "/ui/api/groups", body, nil); st == 200 {
 			t.Errorf("accepted %v", body)
 		}
+	}
+}
+
+func TestAttachAWSProfile(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "config"), []byte("[profile shared]\ncredential_process = signer --key k.pem\nregion = ap-southeast-2\n"), 0o600)
+	t.Setenv("AWS_CONFIG_FILE", filepath.Join(dir, "config"))
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "none"))
+	f := newFixture(t, base)
+	f.signIn()
+	if st, out := f.do("POST", "/ui/api/aws/shared/attach", map[string]any{"read_only": true}, nil); st != 200 {
+		t.Fatalf("attach: %d %v", st, out)
+	}
+	c := f.b.Config().Connectors["aws-shared"]
+	if c.Env["AWS_PROFILE"] != "shared" || c.Env["AWS_REGION"] != "ap-southeast-2" || c.Group != "AWS" ||
+		c.ToolClasses["aws___run_script"] != config.Read || !slices.Contains(c.Args, awsEndpoint) {
+		t.Fatalf("connector: %+v", c)
+	}
+	data, _ := os.ReadFile(f.b.path)
+	if strings.Contains(string(data), "signer") {
+		t.Error("credential_process leaked into broker.yaml")
+	}
+	_, out := f.do("GET", "/ui/api/aws", nil, nil)
+	p := out["profiles"].([]any)[0].(map[string]any)
+	if p["attached"] != "aws-shared" || p["read_only"] != true || p["kind"] != "process" {
+		t.Errorf("list: %v", p)
+	}
+	if strings.Contains(fmt.Sprint(out), "signer") {
+		t.Error("credential_process leaked into the API")
+	}
+	// Re-attaching updates the same connector.
+	if st, _ := f.do("POST", "/ui/api/aws/shared/attach", map[string]any{"read_only": false}, nil); st != 200 || f.b.Config().Connectors["aws-shared"].ToolClasses != nil {
+		t.Errorf("update: %d %+v", st, f.b.Config().Connectors["aws-shared"])
+	}
+	if st, _ := f.do("POST", "/ui/api/aws/nope/attach", map[string]any{}, nil); st != http.StatusNotFound {
+		t.Errorf("unknown profile: %d", st)
 	}
 }

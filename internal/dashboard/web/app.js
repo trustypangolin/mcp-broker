@@ -368,6 +368,7 @@ pages.connectors = async (main) => {
       h("div", {}, h("div", {}, "MCP endpoint ", h("code", {}, me.url)), h("div", { class: "muted" }, "Config ", h("code", {}, me.config), " · up since ", new Date(me.started).toLocaleString())),
       h("div", { class: "row" },
         h("button", { onclick: (ev) => run(ev.target, async () => { toast(reloadSummary(await api("POST", "reload"))); route(); }) }, "Reload config"),
+        h("button", { onclick: () => awsProfiles() }, "AWS profiles…"),
         h("button", { class: "primary", onclick: () => editConnector(null, {}, data.classes, items) }, "Add connector"))));
   const items = data.connectors.map((c) => ({ ...c, group: c.def.group || "" }));
   const nameOf = (c) => c.name;
@@ -470,6 +471,36 @@ function editConnector(name, def, classes, items) {
         route();
       }) }, "Save and apply"),
     ]);
+}
+
+// awsProfiles attaches profiles from ~/.aws/config: each becomes its own connector running
+// AWS's signing proxy as that profile.
+async function awsProfiles() {
+  const data = await api("GET", "aws");
+  const kindNote = { sso: "SSO: run aws sso login when the session lapses", process: "credential process (certificates): no sign-in", "assume-role": "assumes a role", keys: "static keys", unknown: "" };
+  const rows = data.profiles.map((p) => {
+    const ro = h("input", { type: "checkbox", checked: !!p.read_only });
+    return h("tr", {},
+      h("td", {}, h("b", {}, p.name), h("div", { class: "hint" }, kindNote[p.kind] || p.kind)),
+      h("td", {}, p.region || h("span", { class: "muted" }, "none")),
+      h("td", {}, p.attached ? h("span", { class: "pill on" }, p.attached) : h("span", { class: "muted" }, "not attached")),
+      h("td", {}, h("label", { class: "checks", title: "Only when the IAM role itself can't write: run_script then runs without approval" }, ro, "read-only role")),
+      h("td", {}, h("div", { class: "row" },
+        h("button", { class: p.attached ? "" : "primary", onclick: (ev) => run(ev.target, async () => {
+          toast(reloadSummary(await api("POST", "aws/" + encodeURIComponent(p.name) + "/attach", { read_only: ro.checked })));
+          document.querySelector("dialog")?.close();
+          route();
+        }) }, p.attached ? "Update" : "Attach"),
+        p.attached && h("button", { class: "danger", onclick: (ev) => { document.querySelector("dialog")?.close(); removeConnector(ev.target, p.attached); } }, "Detach"))));
+  });
+  dialog("AWS profiles",
+    h("div", {},
+      h("p", { class: "muted" }, "Profiles in ", h("code", {}, data.config), ". Attaching one adds a connector that reaches ", h("code", {}, data.endpoint),
+        " signed as that profile, tagged aws and grouped under AWS. Keys never go into broker.yaml: the proxy reads them the way the AWS CLI does."),
+      data.profiles.length ? h("div", { class: "table-wrap" }, h("table", {},
+        h("tr", {}, h("th", {}, "Profile"), h("th", {}, "Region"), h("th", {}, "Connector"), h("th", {}, "Policy"), h("th", {}, "")), rows))
+        : h("div", { class: "empty" }, "No AWS profiles found.")),
+    (close) => [h("button", { class: "primary", onclick: close }, "Close")]);
 }
 
 async function removeConnector(btn, name) {

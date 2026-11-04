@@ -65,6 +65,17 @@ connectors:
     args: [mcp]
 ```
 
+## AWS accounts
+
+**Connectors → AWS profiles…** lists the profiles in `~/.aws/config` and attaches any of
+them as a connector (`aws-<profile>`, group AWS, tag `aws`). Each one runs AWS's signing
+proxy (`uvx mcp-proxy-for-aws`) as that profile against the managed AWS MCP server, so
+roles and approvals apply per account and no keys go into `broker.yaml`. Tick
+**read-only role** only when the IAM role itself can't write: `run_script` then runs
+without approval, since AWS refuses anything else. Certificate (IAM Roles Anywhere) and
+key profiles work unattended; SSO profiles stop working when the session lapses until you
+run `aws sso login --profile <name>`.
+
 ## Remote servers that need a sign-in (OAuth)
 
 Hosted MCP servers such as Xero's want a person to sign in. Register an app with the
