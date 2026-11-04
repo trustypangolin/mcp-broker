@@ -470,3 +470,16 @@ func TestConcurrentAgentsShareOneProcess(t *testing.T) {
 		t.Errorf("%d downstream instances, want 1 shared", n)
 	}
 }
+
+func TestRegroupKeepsConnector(t *testing.T) {
+	a := config.Connector{Command: "x.exe", Args: []string{"-v"}}
+	b := a
+	b.Group = "Tools"
+	if !sameDef(a, b) {
+		t.Error("a group change would restart the connector")
+	}
+	b.Args = []string{"-q"}
+	if sameDef(a, b) {
+		t.Error("an args change was missed")
+	}
+}

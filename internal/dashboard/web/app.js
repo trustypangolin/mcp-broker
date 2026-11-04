@@ -99,6 +99,119 @@ function dialog(title, body, actions) {
   return d;
 }
 
+// ---- folding and groups ----
+
+// What is folded is a per-browser convenience, so it lives in localStorage, not the config.
+const foldKey = "mcpb.folded";
+let folded = {};
+try { folded = JSON.parse(localStorage.getItem(foldKey) || "{}") || {}; } catch { folded = {}; }
+const isFolded = (key, dflt) => (key in folded ? folded[key] : dflt);
+function setFolded(key, v) {
+  folded[key] = v;
+  try { localStorage.setItem(foldKey, JSON.stringify(folded)); } catch { /* private window */ }
+}
+
+// fold builds a block whose head toggles its body. Clicks on buttons in the head act on
+// the button, not the fold.
+function fold(key, dflt, cls, head, body) {
+  const arrow = h("span", { class: "chev", "aria-hidden": "true" });
+  const bodyEl = h("div", { class: "fold-body" }, body);
+  const headEl = h("div", { class: "fold-head", role: "button", tabindex: "0" }, arrow, head);
+  const el = h("div", { class: cls + " fold" }, headEl, bodyEl);
+  const set = (v) => {
+    el.classList.toggle("folded", v);
+    headEl.setAttribute("aria-expanded", String(!v));
+    bodyEl.hidden = v;
+  };
+  const toggle = (ev) => {
+    if (ev.target.closest("button, a, input, select")) return;
+    const v = !el.classList.contains("folded");
+    setFolded(key, v);
+    set(v);
+  };
+  headEl.addEventListener("click", toggle);
+  headEl.addEventListener("keydown", (ev) => (ev.key === "Enter" || ev.key === " ") && (ev.preventDefault(), toggle(ev)));
+  set(isFolded(key, dflt));
+  return el;
+}
+
+// foldAll folds or unfolds every block under root.
+function foldAll(root, v) {
+  for (const el of root.querySelectorAll(".fold")) {
+    const head = el.querySelector(":scope > .fold-head");
+    if (el.classList.contains("folded") !== v) head.click();
+  }
+}
+
+// grouped lays items out under collapsible group headings, named groups first, then the
+// ungrouped ones. section is "connectors" or "profiles"; card(item) renders one item.
+function grouped(section, items, nameOf, card, admin) {
+  const groups = new Map();
+  for (const it of items) {
+    const g = it.group || "";
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(it);
+  }
+  const names = [...groups.keys()].filter(Boolean).sort((a, b) => a.localeCompare(b));
+  if (groups.has("")) names.push("");
+  if (names.length === 1 && names[0] === "") return groups.get("").map(card);
+  return names.map((g) => {
+    const members = groups.get(g);
+    const head = h("div", { class: "row grow" },
+      h("span", { class: "group-name" }, g || "Ungrouped"),
+      h("span", { class: "muted" }, String(members.length)),
+      h("span", { class: "grow" }),
+      admin && g && h("button", { class: "link", onclick: () => groupDialog(section, items, nameOf, { rename: g }) }, "Rename"),
+      admin && g && h("button", { class: "link", onclick: (ev) => setGroup(ev.target, section, members.map(nameOf), "") }, "Ungroup"));
+    return fold(section + ":group:" + g, false, "group", head, members.map(card));
+  });
+}
+
+async function setGroup(btn, section, names, group) {
+  await run(btn, async () => {
+    toast(reloadSummary(await api("POST", "groups", { section, names, group })));
+    route();
+  });
+}
+
+// groupList is a datalist of the groups in use, for group inputs.
+function groupList(items) {
+  const id = "groups-" + Math.random().toString(36).slice(2);
+  const gs = [...new Set(items.map((i) => i.group).filter(Boolean))].sort();
+  return { id, el: h("datalist", { id }, gs.map((g) => h("option", { value: g }))) };
+}
+
+// groupDialog creates a group (opts empty), renames one (opts.rename) or moves one item
+// (opts.move). Creating picks members with checkboxes.
+function groupDialog(section, items, nameOf, opts = {}) {
+  const dl = groupList(items);
+  const current = opts.rename ?? (opts.move ? items.find((i) => nameOf(i) === opts.move).group || "" : "");
+  const input = h("input", { value: current, list: dl.id, placeholder: "ArtCraft MCPs" });
+  const picks = opts.rename !== undefined || opts.move ? [] : items.map((i) =>
+    h("label", {}, h("input", { type: "checkbox", value: nameOf(i) }), nameOf(i), i.group && h("span", { class: "muted" }, " (" + i.group + ")")));
+  const title = opts.rename !== undefined ? "Rename group " + opts.rename : opts.move ? "Group for " + opts.move : "New group";
+  dialog(title,
+    h("div", {}, dl.el,
+      field("Group name", input, opts.move ? "Pick an existing group or type a new one. Empty takes it out of any group." : "Written as group: on each member in broker.yaml."),
+      picks.length > 0 && [h("label", {}, "Members"), h("div", { class: "checks col" }, picks)]),
+    (close) => [
+      h("button", { onclick: close }, "Cancel"),
+      h("button", { class: "primary", onclick: (ev) => run(ev.target, async () => {
+        const g = input.value.trim();
+        let names;
+        if (opts.rename !== undefined) names = items.filter((i) => i.group === opts.rename).map(nameOf);
+        else if (opts.move) names = [opts.move];
+        else names = picks.map((l) => l.querySelector("input")).filter((c) => c.checked).map((c) => c.value);
+        if (!opts.move && !g) throw new Error("Give the group a name.");
+        if (!names.length) throw new Error("Pick at least one member.");
+        toast(reloadSummary(await api("POST", "groups", { section, names, group: g })));
+        close();
+        route();
+      }) }, "Save and apply"),
+    ]);
+  input.focus();
+}
+
 // ---- state and routing ----
 
 let me = { admin: false };
@@ -177,8 +290,8 @@ const stateClass = { ready: "allow", starting: "approve", updating: "approve", s
 pages.profiles = async (main) => {
   const render = async () => {
     const data = await api("GET", "profiles");
-    const cards = data.profiles.map((p) => h("div", { class: "card" },
-      h("h3", {}, p.profile, h("span", { class: "pill " + (stateClass[p.state] || "") }, p.state), p.adopted && h("span", { class: "pill" }, "adopted")),
+    const card = (p) => fold("profiles:" + p.profile, false, "card",
+      h("h3", {}, p.profile, h("span", { class: "pill " + (stateClass[p.state] || "") }, p.state), p.adopted && h("span", { class: "pill" }, "adopted")), [
       p.description && h("div", {}, p.description),
       h("div", { class: "muted" },
         p.pid ? "pid " + p.pid + " · " : "", p.uptime ? "up " + p.uptime + " · " : "",
@@ -191,9 +304,15 @@ pages.profiles = async (main) => {
           ? h("button", { class: "danger", onclick: (ev) => profileAction(ev.target, p.profile, "stop") }, "Stop")
           : data.admin && h("button", { class: "primary", disabled: p.state === "updating" || p.state === "stopping", onclick: () => showPlan(p.profile, "start") }, "Start…"),
         data.admin && h("button", { disabled: p.state !== "stopped" && p.state !== "exited", onclick: () => showPlan(p.profile, "update") }, "Update…"),
-        h("button", { onclick: () => showLogs(p.profile) }, "Logs"))));
+        h("button", { onclick: () => showLogs(p.profile) }, "Logs"),
+        data.admin && h("button", { onclick: () => groupDialog("profiles", data.profiles, (x) => x.profile, { move: p.profile }) }, "Group…"))]);
+    const cards = grouped("profiles", data.profiles, (x) => x.profile, card, data.admin);
     fill(main,
-      h("h2", {}, "Profiles"),
+      h("div", { class: "row spread" }, h("h2", {}, "Profiles"),
+        cards.length > 0 && h("div", { class: "row" },
+          h("button", { class: "link", onclick: () => foldAll(main, false) }, "Expand all"),
+          h("button", { class: "link", onclick: () => foldAll(main, true) }, "Collapse all"),
+          data.admin && h("button", { onclick: () => groupDialog("profiles", data.profiles, (x) => x.profile) }, "New group"))),
       h("p", { class: "muted" }, "Long-running apps the broker starts, health-checks and always stops, child processes included. Agents use them through the profile tool, with approval where their role says so."),
       cards.length ? cards : h("div", { class: "card empty" }, "No profiles configured. Add them under profiles: in the Config tab."));
   };
@@ -249,15 +368,20 @@ pages.connectors = async (main) => {
       h("div", {}, h("div", {}, "MCP endpoint ", h("code", {}, me.url)), h("div", { class: "muted" }, "Config ", h("code", {}, me.config), " · up since ", new Date(me.started).toLocaleString())),
       h("div", { class: "row" },
         h("button", { onclick: (ev) => run(ev.target, async () => { toast(reloadSummary(await api("POST", "reload"))); route(); }) }, "Reload config"),
-        h("button", { class: "primary", onclick: () => editConnector(null, {}) }, "Add connector"))));
-  const cards = data.connectors.map((c) => {
+        h("button", { class: "primary", onclick: () => editConnector(null, {}, data.classes, items) }, "Add connector"))));
+  const items = data.connectors.map((c) => ({ ...c, group: c.def.group || "" }));
+  const nameOf = (c) => c.name;
+  const card = (c) => {
     const def = c.def;
     const loaded = c.instances.filter((i) => i.loaded);
-    return h("div", { class: "card" },
+    const bad = (c.issues || []).some((i) => i.startsWith("error"));
+    return fold("connectors:" + c.name, true, "card",
       h("h3", {}, c.name,
         h("span", { class: "pill" }, def.url ? "remote" : "local"),
         loaded.length ? h("span", { class: "pill on" }, "loaded") : h("span", { class: "pill" }, "idle"),
-        (def.tags || []).map((t) => h("span", { class: "pill" }, "tag:" + t))),
+        (def.tags || []).map((t) => h("span", { class: "pill" }, "tag:" + t)),
+        bad && h("span", { class: "pill deny" }, "error"),
+        def.description && h("span", { class: "muted head-desc" }, def.description)), [
       def.description && h("div", {}, def.description),
       h("pre", {}, def.url || [def.command, ...(def.args || [])].join(" ")),
       loaded.map((i) => h("div", { class: "row muted" },
@@ -268,18 +392,26 @@ pages.connectors = async (main) => {
       c.instances.some((i) => i.stderr && i.stderr.length) && h("details", {}, h("summary", { class: "muted" }, "Recent stderr"),
         c.instances.map((i) => h("pre", {}, (i.stderr || []).join("\n")))),
       h("div", { class: "row", style: "margin-top:8px" },
-        h("button", { onclick: () => editConnector(c.name, def, data.classes) }, "Edit"),
-        h("button", { class: "danger", onclick: (ev) => removeConnector(ev.target, c.name) }, "Remove")));
-  });
-  fill(main, head, cards.length ? cards : h("div", { class: "card empty" }, "No connectors yet."));
+        h("button", { onclick: () => editConnector(c.name, def, data.classes, items) }, "Edit"),
+        h("button", { onclick: () => groupDialog("connectors", items, nameOf, { move: c.name }) }, "Group…"),
+        h("button", { class: "danger", onclick: (ev) => removeConnector(ev.target, c.name) }, "Remove"))]);
+  };
+  const cards = grouped("connectors", items, nameOf, card, true);
+  const tools = cards.length > 0 && h("div", { class: "row", style: "justify-content:flex-end;margin-bottom:8px" },
+    h("button", { class: "link", onclick: () => foldAll(main, false) }, "Expand all"),
+    h("button", { class: "link", onclick: () => foldAll(main, true) }, "Collapse all"),
+    h("button", { onclick: () => groupDialog("connectors", items, nameOf) }, "New group"));
+  fill(main, head, tools, cards.length ? cards : h("div", { class: "card empty" }, "No connectors yet."));
 };
 
-function editConnector(name, def, classes) {
+function editConnector(name, def, classes, items) {
   const remote = !!def.url;
+  const dl = groupList(items || []);
   const f = {
     name: h("input", { value: name || "", disabled: !!name, placeholder: "excel-live" }),
     description: h("input", { value: def.description || "" }),
     tags: h("input", { value: (def.tags || []).join(", "), placeholder: "office, files" }),
+    group: h("input", { value: def.group || "", list: dl.id, placeholder: "none" }),
     kind: h("select", {}, h("option", { value: "local", selected: !remote }, "Local: start a command (stdio)"), h("option", { value: "remote", selected: remote }, "Remote: Streamable HTTP URL")),
     command: h("input", { value: def.command || "", placeholder: "uv, node, C:\\path\\server.exe" }),
     args: h("textarea", { value: (def.args || []).join("\n") }),
@@ -305,6 +437,7 @@ function editConnector(name, def, classes) {
   dialog(name ? "Edit " + name : "Add connector",
     h("div", {},
       h("div", { class: "grid2" }, field("Name", f.name), field("Tags", f.tags, "Roles can select connectors by tag:<name>.")),
+      dl.el, field("Group", f.group, "A heading on this page only; it doesn't change what agents see."),
       field("Description", f.description, "Shown to agents in list_connectors."),
       field("Kind", f.kind), local, rem,
       field("Environment", f.env, "NAME=value, one per line. Put secrets in an env file instead: broker.yaml holds no secrets."),
@@ -319,6 +452,7 @@ function editConnector(name, def, classes) {
         const isLocal = f.kind.value === "local";
         const body = {
           description: f.description.value.trim() || undefined,
+          group: f.group.value.trim() || undefined,
           tags: f.tags.value.split(",").map((t) => t.trim()).filter(Boolean),
           command: isLocal ? f.command.value.trim() : undefined,
           args: isLocal ? lines(f.args.value) : undefined,

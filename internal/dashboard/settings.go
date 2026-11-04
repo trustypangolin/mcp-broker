@@ -122,6 +122,60 @@ func (d *Dashboard) deleteConnector(w http.ResponseWriter, r *http.Request) {
 	d.apply(w, "connectors", name, nil)
 }
 
+// maxGroupName keeps group headings to something that fits on a line.
+const maxGroupName = 64
+
+// setGroup files connectors or profiles under a group ("" takes them out of any group).
+// Creating, renaming and ungrouping a group are all this one edit, written at once.
+func (d *Dashboard) setGroup(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Section string   `json:"section"`
+		Names   []string `json:"names"`
+		Group   string   `json:"group"`
+	}
+	if err := decode(r, &body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad body: "+err.Error())
+		return
+	}
+	body.Group = strings.TrimSpace(body.Group)
+	if len(body.Group) > maxGroupName || strings.ContainsAny(body.Group, "\r\n\t") {
+		jsonError(w, http.StatusBadRequest, "group names are one line of at most 64 characters")
+		return
+	}
+	cfg := d.b.Config()
+	var exists func(string) bool
+	switch body.Section {
+	case "connectors":
+		exists = func(n string) bool { _, ok := cfg.Connectors[n]; return ok }
+	case "profiles":
+		exists = func(n string) bool { _, ok := cfg.Profiles[n]; return ok }
+	default:
+		jsonError(w, http.StatusBadRequest, "section is connectors or profiles")
+		return
+	}
+	if len(body.Names) == 0 {
+		jsonError(w, http.StatusBadRequest, "pick at least one")
+		return
+	}
+	for _, n := range body.Names {
+		if !exists(n) {
+			jsonError(w, http.StatusNotFound, "no such entry: "+n)
+			return
+		}
+	}
+	data, err := os.ReadFile(cfg.Path)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	out, err := config.SetFields(data, body.Section, body.Names, "group", body.Group)
+	if err != nil {
+		jsonError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	d.write(w, cfg.Path, out, config.Hash(data))
+}
+
 // agentForm is an agent as the form edits it.
 type agentForm struct {
 	Role      string         `json:"role" yaml:"role"`

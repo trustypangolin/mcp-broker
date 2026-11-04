@@ -209,6 +209,7 @@ func (d *Dashboard) Mount(mux *http.ServeMux) {
 	mux.Handle("PUT /ui/api/connectors/{name}", d.api(admin, d.putConnector))
 	mux.Handle("DELETE /ui/api/connectors/{name}", d.api(admin, d.deleteConnector))
 	mux.Handle("POST /ui/api/connectors/{key}/unload", d.api(admin, d.unload))
+	mux.Handle("POST /ui/api/groups", d.api(admin, d.setGroup))
 	mux.Handle("GET /ui/api/agents", d.api(admin, d.listAgents))
 	mux.Handle("PUT /ui/api/agents/{name}", d.api(admin, d.putAgent))
 	mux.Handle("DELETE /ui/api/agents/{name}", d.api(admin, d.deleteAgent))

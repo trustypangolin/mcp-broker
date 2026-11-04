@@ -105,7 +105,7 @@ func (g *Gateway) Reload(cfg *config.Config) []string {
 	g.mu.Lock()
 	var stale []*downstream
 	for key, d := range g.conns {
-		if cn, ok := cfg.Connectors[d.name]; !ok || !reflect.DeepEqual(cn, d.cn) {
+		if cn, ok := cfg.Connectors[d.name]; !ok || !sameDef(cn, d.cn) {
 			stale = append(stale, d)
 			delete(g.conns, key)
 		}
@@ -120,6 +120,13 @@ func (g *Gateway) Reload(cfg *config.Config) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// sameDef reports whether two definitions start the same server: the dashboard group is
+// only a label, so regrouping keeps running connectors.
+func sameDef(a, b config.Connector) bool {
+	a.Group, b.Group = "", ""
+	return reflect.DeepEqual(a, b)
 }
 
 // Connector describes one connector instance for the dashboard and tray.

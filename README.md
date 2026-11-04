@@ -50,6 +50,21 @@ other file with an `mcpServers` block. Add `--apply` to import, and
 `--switch` to also point those clients at the broker (each original is kept as
 `.bak-<time>`; for Claude Code it prints the `claude mcp` commands instead).
 
+The dashboard's Connectors and Profiles pages fold: click a card or group heading to
+collapse it (remembered per browser). **New group**, **Group…** on a card, and a group's
+**Rename** and **Ungroup** write a `group:` line on each member in `broker.yaml`, and a
+`group:` you type into the file shows up as a heading on the next reload. Groups are only
+labels: they don't change what agents see (use `tags` and roles for that), and regrouping
+a running connector doesn't restart it.
+
+```yaml
+connectors:
+  cadcraft:
+    group: ArtCraft MCPs
+    command: C:\Program Files\CADCraft\cadcraft-cli.exe
+    args: [mcp]
+```
+
 ## Remote servers that need a sign-in (OAuth)
 
 Hosted MCP servers such as Xero's want a person to sign in. Register an app with the

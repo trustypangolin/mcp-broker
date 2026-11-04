@@ -5,10 +5,21 @@ import (
 	"net/http"
 
 	"github.com/trustypangolin/mcp-broker/internal/server"
+	"github.com/trustypangolin/mcp-broker/internal/supervisor"
 )
 
+type profileView struct {
+	supervisor.Status
+	Group string `json:"group,omitempty"`
+}
+
 func (d *Dashboard) listProfiles(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]any{"profiles": d.b.Supervisor().List(), "admin": d.allowed(r, admin)})
+	cfg := d.b.Config()
+	out := []profileView{}
+	for _, st := range d.b.Supervisor().List() {
+		out = append(out, profileView{st, cfg.Profiles[st.Profile].Group})
+	}
+	writeJSON(w, map[string]any{"profiles": out, "admin": d.allowed(r, admin)})
 }
 
 func (d *Dashboard) profileLogs(w http.ResponseWriter, r *http.Request) {

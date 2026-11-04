@@ -80,6 +80,65 @@ func SetEntry(data []byte, section, key string, value any) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// SetFields returns data with field set to value inside each named entry of section
+// (connectors.<key>.group, say), or removed when value is "". Everything else, comments
+// included, is left as it was. Entries that don't exist are an error.
+func SetFields(data []byte, section string, keys []string, field, value string) ([]byte, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, err
+	}
+	if doc.Kind == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("config is not a mapping")
+	}
+	sec := lookup(doc.Content[0], section)
+	if sec == nil || sec.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("no %s in the config", section)
+	}
+	for _, key := range keys {
+		e := lookup(sec, key)
+		if e == nil {
+			return nil, fmt.Errorf("no %s.%s in the config", section, key)
+		}
+		if e.Kind == yaml.ScalarNode && e.Tag == "!!null" { // `name:` with no body
+			*e = yaml.Node{Kind: yaml.MappingNode, LineComment: e.LineComment}
+		}
+		if e.Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("%s.%s is not a mapping", section, key)
+		}
+		idx := -1
+		for i := 0; i+1 < len(e.Content); i += 2 {
+			if e.Content[i].Value == field {
+				idx = i
+			}
+		}
+		switch {
+		case value == "" && idx >= 0:
+			e.Content = append(e.Content[:idx], e.Content[idx+2:]...)
+		case value == "":
+		case idx >= 0:
+			v := e.Content[idx+1]
+			v.Kind, v.Tag, v.Value, v.Style, v.Content = yaml.ScalarNode, "!!str", value, 0, nil
+		default:
+			// After description, if any, so the label sits near the top of the entry.
+			at := 0
+			if len(e.Content) >= 2 && e.Content[0].Value == "description" {
+				at = 2
+			}
+			kv := []*yaml.Node{{Kind: yaml.ScalarNode, Value: field}, {Kind: yaml.ScalarNode, Tag: "!!str", Value: value}}
+			e.Content = append(e.Content[:at], append(kv, e.Content[at:]...)...)
+		}
+	}
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		return nil, err
+	}
+	enc.Close()
+	return buf.Bytes(), nil
+}
+
 func lookup(m *yaml.Node, key string) *yaml.Node {
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		if m.Content[i].Value == key {

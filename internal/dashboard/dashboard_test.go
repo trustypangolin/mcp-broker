@@ -337,3 +337,34 @@ func TestLoginCodeAPI(t *testing.T) {
 		t.Fatalf("code: %d %v", st, out)
 	}
 }
+
+func TestSetGroup(t *testing.T) {
+	f := newFixture(t, base)
+	f.signIn()
+	st, out := f.do("POST", "/ui/api/groups", map[string]any{"section": "connectors", "names": []string{"fake"}, "group": " Fakes "}, nil)
+	if st != 200 || f.b.Config().Connectors["fake"].Group != "Fakes" {
+		t.Fatalf("set group: %d %v", st, out)
+	}
+	data, _ := os.ReadFile(f.b.path)
+	if !strings.Contains(string(data), "# VS Code") {
+		t.Errorf("file lost comments:\n%s", data)
+	}
+	// The connector list carries it, so a form save keeps it.
+	_, out = f.do("GET", "/ui/api/connectors", nil, nil)
+	if g := out["connectors"].([]any)[0].(map[string]any)["def"].(map[string]any)["group"]; g != "Fakes" {
+		t.Errorf("list group: %v", g)
+	}
+	if st, _ := f.do("POST", "/ui/api/groups", map[string]any{"section": "connectors", "names": []string{"fake"}, "group": ""}, nil); st != 200 || f.b.Config().Connectors["fake"].Group != "" {
+		t.Errorf("ungroup: %d", st)
+	}
+	for _, body := range []map[string]any{
+		{"section": "connectors", "names": []string{"missing"}, "group": "x"},
+		{"section": "agents", "names": []string{"vscode"}, "group": "x"},
+		{"section": "connectors", "names": []string{}, "group": "x"},
+		{"section": "connectors", "names": []string{"fake"}, "group": "a\nb"},
+	} {
+		if st, _ := f.do("POST", "/ui/api/groups", body, nil); st == 200 {
+			t.Errorf("accepted %v", body)
+		}
+	}
+}

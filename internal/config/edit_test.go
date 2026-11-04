@@ -99,3 +99,53 @@ func TestWriteFile(t *testing.T) {
 		t.Fatal("not written")
 	}
 }
+
+func TestSetFieldsGroup(t *testing.T) {
+	text := editBase + `  two:   # second
+    description: Two
+    command: two.exe
+  three: {command: three.exe}
+`
+	text = strings.Replace(text, "profiles: {}\n", "", 1) + "profiles:\n  app:\n    command: app.exe\n"
+	out, err := SetFields([]byte(text), "connectors", []string{"one", "two", "three"}, "group", "ArtCraft MCPs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(out)
+	for _, want := range []string{"# the first one", "# second", "description: Two\n    group: ArtCraft MCPs\n    command: two.exe"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in:\n%s", want, s)
+		}
+	}
+	cfg, err := Parse(out, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"one", "two", "three"} {
+		if cfg.Connectors[n].Group != "ArtCraft MCPs" {
+			t.Errorf("%s: group %q", n, cfg.Connectors[n].Group)
+		}
+	}
+	// Rename one, clear another.
+	out, _ = SetFields(out, "connectors", []string{"one"}, "group", "Other")
+	out, _ = SetFields(out, "connectors", []string{"two"}, "group", "")
+	cfg, _ = Parse(out, "")
+	if cfg.Connectors["one"].Group != "Other" || cfg.Connectors["two"].Group != "" || strings.Count(string(out), "group:") != 2 {
+		t.Errorf("rename/clear:\n%s", out)
+	}
+	out, err = SetFields(out, "profiles", []string{"app"}, "group", "GPU")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ = Parse(out, ""); cfg.Profiles["app"].Group != "GPU" {
+		t.Errorf("profile group:\n%s", out)
+	}
+	if _, err := SetFields(out, "connectors", []string{"nope"}, "group", "x"); err == nil {
+		t.Error("unknown entry accepted")
+	}
+	// A group name YAML would read as another type stays a string.
+	out, _ = SetFields(out, "connectors", []string{"one"}, "group", "true")
+	if cfg, err = Parse(out, ""); err != nil || cfg.Connectors["one"].Group != "true" {
+		t.Errorf("quoted group: %v\n%s", err, out)
+	}
+}

@@ -94,7 +94,10 @@ type Policy struct {
 
 // Connector is a downstream MCP server: local (Command) or remote Streamable HTTP (URL).
 type Connector struct {
-	Description string            `yaml:"description"`
+	Description string `yaml:"description"`
+	// Group is a heading the dashboard files the connector under; it has no effect on
+	// policy.
+	Group       string            `yaml:"group"`
 	Tags        []string          `yaml:"tags"`
 	Command     string            `yaml:"command"`
 	Args        []string          `yaml:"args"`
@@ -128,7 +131,9 @@ func (c Connector) Remote() bool { return c.URL != "" }
 
 // Profile is a supervised long-running local process (ComfyUI and friends).
 type Profile struct {
-	Description string            `yaml:"description"`
+	Description string `yaml:"description"`
+	// Group is a heading the dashboard files the profile under.
+	Group       string            `yaml:"group"`
 	Cwd         string            `yaml:"cwd"`
 	Command     string            `yaml:"command"`
 	Args        []string          `yaml:"args"`
