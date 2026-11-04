@@ -10,13 +10,25 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/config"
 )
 
-// awsEndpoint is AWS's managed MCP server. Calls to it are SigV4-signed by AWS's local
+// awsEndpoint is AWS's managed MCP server, and awsSignRegion the region its requests
+// are signed for. Calls to it are SigV4-signed by AWS's local
 // proxy, which runs as one AWS profile; so each attached profile is its own connector,
 // and roles, tags and approvals apply per account.
-const awsEndpoint = "https://aws-mcp.us-east-1.api.aws/mcp"
+const (
+	awsEndpoint   = "https://aws-mcp.us-east-1.api.aws/mcp"
+	awsSignRegion = "us-east-1"
+)
 
-// awsProxyArgs start the signing proxy through uvx.
-var awsProxyArgs = []string{"mcp-proxy-for-aws@latest", awsEndpoint}
+// awsProxyArgs start the signing proxy through uvx as profile. The proxy signs for
+// AWS_REGION unless --region is given, so the signing region is pinned to the endpoint's;
+// the profile's own region goes in as metadata, the region AWS calls default to.
+func awsProxyArgs(p awsconfig.Profile) []string {
+	args := []string{"mcp-proxy-for-aws@latest", awsEndpoint, "--profile", p.Name, "--region", awsSignRegion}
+	if p.Region != "" {
+		args = append(args, "--metadata", "AWS_REGION="+p.Region)
+	}
+	return args
+}
 
 // awsReadTools are the tools a read-only IAM role can be trusted with: the role, not the
 // broker, stops writes.
@@ -94,10 +106,10 @@ func (d *Dashboard) attachAWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	d.apply(w, "connectors", name, awsEntry(*p, body.ReadOnly))
+	d.apply(w, "connectors", name, awsEntry(p, body.ReadOnly))
 }
 
-func awsEntry(p awsconfig.Profile, readOnly bool) config.ConnectorEntry {
+func awsEntry(p *awsconfig.Profile, readOnly bool) config.ConnectorEntry {
 	cmd := "uvx"
 	// The tray may not have the shell's PATH, so write where uvx is now.
 	if path, err := exec.LookPath("uvx"); err == nil {
@@ -112,12 +124,11 @@ func awsEntry(p awsconfig.Profile, readOnly bool) config.ConnectorEntry {
 		Group:       "AWS",
 		Tags:        []string{"aws"},
 		Command:     cmd,
-		Args:        awsProxyArgs,
-		Env:         map[string]string{"AWS_PROFILE": p.Name},
-		IdleUnload:  "30m",
-	}
-	if p.Region != "" {
-		e.Env["AWS_REGION"] = p.Region
+		Args:        awsProxyArgs(*p),
+		// --profile picks the credentials; AWS_PROFILE also marks the connector as this
+		// profile's for the dashboard.
+		Env:        map[string]string{"AWS_PROFILE": p.Name},
+		IdleUnload: "30m",
 	}
 	if readOnly {
 		e.ToolClasses = map[string]string{}

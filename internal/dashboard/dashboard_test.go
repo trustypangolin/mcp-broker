@@ -382,8 +382,9 @@ func TestAttachAWSProfile(t *testing.T) {
 		t.Fatalf("attach: %d %v", st, out)
 	}
 	c := f.b.Config().Connectors["aws-shared"]
-	if c.Env["AWS_PROFILE"] != "shared" || c.Env["AWS_REGION"] != "ap-southeast-2" || c.Group != "AWS" ||
-		c.ToolClasses["aws___run_script"] != config.Read || !slices.Contains(c.Args, awsEndpoint) {
+	wantArgs := []string{"mcp-proxy-for-aws@latest", awsEndpoint, "--profile", "shared", "--region", "us-east-1", "--metadata", "AWS_REGION=ap-southeast-2"}
+	if c.Env["AWS_PROFILE"] != "shared" || c.Group != "AWS" ||
+		c.ToolClasses["aws___run_script"] != config.Read || !slices.Equal(c.Args, wantArgs) {
 		t.Fatalf("connector: %+v", c)
 	}
 	data, _ := os.ReadFile(f.b.path)
