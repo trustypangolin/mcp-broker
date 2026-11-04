@@ -173,8 +173,22 @@ Without the tray: `mcp-broker init`, `mcp-broker token create <agent> --save`,
 | `mcp-broker approvals [approve\|deny ID]` | list or decide pending approvals |
 | `mcp-broker token create\|list\|revoke` | agent tokens |
 | `mcp-broker import [--apply] [--switch]` | bring servers over from client configs |
+| `mcp-broker client-config <harness\|all\|list> [--agent NAME] [--http] [--wsl]` | print the snippet a client needs |
 | `mcp-broker signin NAME` / `signout NAME` | sign in to an OAuth connector, or forget its token |
 | `mcp-broker init` / `validate` | create a starter config / check one |
+
+`client-config` prints a snippet to paste into a client's config. The clients are
+`claude-code`, `claude-desktop`, `vscode`, `codex`, `cursor`, `gemini` and `windsurf`. It
+uses the stdio shim by default. `--http` gives the Streamable HTTP form instead, which reads
+the token from `$MCP_BROKER_TOKEN`; in VS Code, a password prompt replaces the variable. Snippets never contain a token, and the command never writes
+to a file. **Client config…** on each agent card in the dashboard shows the same snippets,
+with a Copy button.
+
+```
+mcp-broker client-config codex                 # ~/.codex/config.toml, agent codex
+mcp-broker client-config vscode --http         # .vscode/mcp.json over HTTP
+mcp-broker client-config claude-code --agent wsl --wsl   # Claude Code inside WSL
+```
 
 ## Building
 

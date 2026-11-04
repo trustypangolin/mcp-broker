@@ -127,3 +127,6 @@ header .brand { flex: 0 0 auto; }
 .pill.lock { color: var(--muted); border-style: dashed; }
 .hot-list { border-color: var(--warn); }
 .fold-head > .seg { margin-left: auto; }
+
+/* client config dialog */
+pre.snippet { max-height: 42vh; overflow: auto; white-space: pre; word-break: normal; user-select: all; }

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/trustypangolin/mcp-broker/internal/approval"
@@ -143,5 +144,27 @@ func TestApproveAlwaysAllow(t *testing.T) {
 		Summary: "x", Channels: []config.Channel{config.ChanDashboard}})
 	if st, _ := f.do("POST", "/ui/api/approvals/"+e.ID, map[string]any{"approve": false, "always": true}, nil); st != http.StatusForbidden {
 		t.Fatalf("deny+always: %d", st)
+	}
+}
+
+func TestClientConfig(t *testing.T) {
+	f := newFixture(t, treeBase)
+	f.signIn()
+	st, out := f.do("GET", "/ui/api/agents/desktop/client-config?harness=codex", nil, nil)
+	if st != 200 {
+		t.Fatalf("codex: %d %v", st, out)
+	}
+	sn := out["snippet"].(map[string]any)
+	if sn["format"] != "toml" || !strings.Contains(sn["text"].(string), "'--agent', 'desktop'") {
+		t.Fatalf("snippet = %v", sn)
+	}
+	if st, _ := f.do("GET", "/ui/api/agents/desktop/client-config?harness=claude-desktop&http=1", nil, nil); st != http.StatusBadRequest {
+		t.Fatalf("desktop over http: %d", st)
+	}
+	if st, _ := f.do("GET", "/ui/api/agents/ghost/client-config?harness=codex", nil, nil); st != http.StatusNotFound {
+		t.Fatalf("unknown agent: %d", st)
+	}
+	if _, out := f.do("GET", "/ui/api/agents/desktop/client-config", nil, nil); len(out["harnesses"].([]any)) < 7 {
+		t.Fatalf("harnesses = %v", out)
 	}
 }

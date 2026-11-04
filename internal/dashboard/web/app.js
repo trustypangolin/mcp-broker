@@ -583,11 +583,9 @@ pages.agents = async (main) => {
       a.saved_token && h("span", { class: "muted" }, " · saved for the local shim"),
       a.tokens.map((t) => h("div", { class: "row muted" }, h("code", {}, t.id), "created " + ago(t.created), t.label && "· " + t.label,
         h("button", { class: "link danger", onclick: (ev) => revokeToken(ev.target, t.id) }, "Revoke")))),
-    h("details", {}, h("summary", { class: "muted" }, "Client config"),
-      h("div", { class: "hint" }, "Point the client at the shim; it reads the saved token, so no secret goes in the client config."),
-      h("pre", {}, a.shim)),
     h("div", { class: "row", style: "margin-top:8px" },
       h("button", { class: "primary", onclick: () => newToken(a.name) }, "New token"),
+      h("button", { onclick: () => clientConfig(a.name, a.saved_token) }, "Client config…"),
       h("button", { onclick: () => editAgent(a.name, a.def, roleNames, data.channels) }, "Edit"),
       h("button", { class: "danger", onclick: (ev) => removeAgent(ev.target, a.name) }, "Remove"))));
   const roles = h("div", { class: "card table-wrap" }, h("table", {},
@@ -636,6 +634,64 @@ function editAgent(name, def, roles, channels) {
         route();
       }) }, "Save and apply"),
     ]);
+}
+
+// copyText copies to the clipboard, or selects the text where the page can't (plain HTTP
+// from another machine).
+async function copyText(text, pre) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Copied");
+  } catch {
+    const r = document.createRange();
+    r.selectNodeContents(pre);
+    getSelection().removeAllRanges();
+    getSelection().addRange(r);
+    toast("Selected: press Ctrl+C to copy");
+  }
+}
+
+// clientConfig shows the snippet a client (Claude Code, Codex, VS Code, ...) needs to
+// connect as agent. The same snippets come from: mcp-broker client-config <harness>.
+async function clientConfig(agent, savedToken) {
+  const { harnesses } = await api("GET", "agents/" + encodeURIComponent(agent) + "/client-config");
+  const pick = h("select", {}, harnesses.map((x) => h("option", { value: x.id, selected: x.default_agent === agent || undefined }, x.title)));
+  const useHTTP = h("input", { type: "checkbox" });
+  const wsl = h("input", { type: "checkbox" });
+  const out = h("div", {});
+  const draw = async () => {
+    const hs = harnesses.find((x) => x.id === pick.value);
+    useHTTP.disabled = !hs.http;
+    if (!hs.http) useHTTP.checked = false;
+    wsl.disabled = useHTTP.checked;
+    const p = new URLSearchParams({ harness: pick.value });
+    if (useHTTP.checked) p.set("http", "1");
+    if (wsl.checked && !useHTTP.checked) p.set("wsl", "1");
+    try {
+      const { snippet: sn } = await api("GET", "agents/" + encodeURIComponent(agent) + "/client-config?" + p);
+      const pre = h("pre", { class: "snippet" }, sn.text);
+      const cmd = sn.command && h("pre", { class: "snippet" }, sn.command);
+      fill(out,
+        h("div", { class: "row spread" }, h("div", { class: "hint" }, "Paste into ", h("b", {}, sn.harness.file)),
+          h("button", { onclick: () => copyText(sn.text, pre) }, "Copy")),
+        pre,
+        cmd && [h("div", { class: "row spread" }, h("div", { class: "hint" }, "Or run"), h("button", { onclick: () => copyText(sn.command, cmd) }, "Copy")), cmd],
+        (sn.notes || []).map((n) => h("div", { class: "hint" }, n)),
+        !sn.http && !savedToken && h("div", { class: "warn" }, "No saved token for ", agent, " yet: use New token with \"Save it for the local shim\" ticked."));
+    } catch (e) {
+      fill(out, h("div", { class: "bad" }, e.message));
+    }
+  };
+  for (const el of [pick, useHTTP, wsl]) el.addEventListener("change", draw);
+  dialog("Client config for " + agent,
+    h("div", {},
+      field("Client", pick),
+      h("div", { class: "checks", style: "margin-top:8px" },
+        h("label", { title: "Connect over Streamable HTTP with a bearer token from the client's environment, instead of the stdio shim" }, useHTTP, "HTTP instead of the shim"),
+        h("label", { title: "The client runs inside WSL and starts the shim by its /mnt/<drive>/ path" }, wsl, "Client runs in WSL")),
+      out),
+    (close) => [h("button", { onclick: close }, "Close")]);
+  await draw();
 }
 
 function newToken(agent) {

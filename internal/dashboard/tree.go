@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/trustypangolin/mcp-broker/internal/approval"
+	"github.com/trustypangolin/mcp-broker/internal/clientcfg"
 	"github.com/trustypangolin/mcp-broker/internal/config"
 	"github.com/trustypangolin/mcp-broker/internal/policy"
 )
@@ -228,4 +229,34 @@ func (d *Dashboard) discover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]int{"tools": len(l.Tools)})
+}
+
+// clientConfig renders the snippet a client needs to connect as an agent. Snippets carry no
+// token: the shim reads the saved one, HTTP ones read it from the client's environment.
+func (d *Dashboard) clientConfig(w http.ResponseWriter, r *http.Request) {
+	name, q := r.PathValue("name"), r.URL.Query()
+	cfg := d.b.Config()
+	if _, ok := cfg.Agents[name]; !ok {
+		jsonError(w, http.StatusNotFound, "no such agent")
+		return
+	}
+	h, ok := clientcfg.Find(q.Get("harness"))
+	if !ok {
+		writeJSON(w, map[string]any{"harnesses": clientcfg.Harnesses()})
+		return
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if q.Get("wsl") != "" {
+		exe = clientcfg.WSLPath(exe)
+	}
+	s, err := clientcfg.Render(h, clientcfg.Target{Exe: exe, Agent: name, URL: d.b.Status().URL, HTTP: q.Get("http") != ""})
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"harnesses": clientcfg.Harnesses(), "snippet": s})
 }

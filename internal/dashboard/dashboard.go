@@ -222,6 +222,7 @@ func (d *Dashboard) Mount(mux *http.ServeMux) {
 	mux.Handle("PUT /ui/api/agents/{name}", d.api(admin, d.putAgent))
 	mux.Handle("DELETE /ui/api/agents/{name}", d.api(admin, d.deleteAgent))
 	mux.Handle("POST /ui/api/agents/{name}/tokens", d.api(admin, d.createToken))
+	mux.Handle("GET /ui/api/agents/{name}/client-config", d.api(admin, d.clientConfig))
 	mux.Handle("DELETE /ui/api/tokens/{id}", d.api(admin, d.revokeToken))
 	mux.Handle("GET /ui/api/config", d.api(admin, d.getConfig))
 	mux.Handle("POST /ui/api/config/check", d.api(admin, d.checkConfig))

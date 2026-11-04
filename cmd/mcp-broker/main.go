@@ -26,6 +26,7 @@ commands:
   reload      re-read the config on the running broker
   status      show the running broker and its connectors
   import      add connectors from Claude Desktop, Claude Code and VS Code configs
+  client-config  print the snippet a client (Claude, Codex, VS Code, ...) needs to use the broker
   ps          list profiles and their state
   start       start a profile (stop, update likewise)
   logs        show a profile's recent output
@@ -79,6 +80,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdDashboard(rest, stdout, stderr)
 	case "import":
 		return cmdImport(rest, stdout, stderr)
+	case "client-config":
+		return cmdClientConfig(rest, stdout, stderr)
 	case "ps":
 		return cmdPs(rest, stdout, stderr)
 	case "start", "stop", "update":
