@@ -61,7 +61,7 @@ func TestProfileStartNeedsApprovalThenStops(t *testing.T) {
 	var asked string
 	h.elicit = func(p *mcp.ElicitParams) *mcp.ElicitResult {
 		asked = p.Message
-		return &mcp.ElicitResult{Action: "decline"}
+		return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"approve": false}}
 	}
 	if out, isErr := h.profile("start", nil); !isErr || !strings.Contains(out, "not approved") {
 		t.Fatalf("declined start = %s", out)

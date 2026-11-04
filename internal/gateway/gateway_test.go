@@ -483,3 +483,40 @@ func TestRegroupKeepsConnector(t *testing.T) {
 		t.Error("an args change was missed")
 	}
 }
+
+// A client that declines without asking (VS Code does, in milliseconds) must not deny a
+// call another channel can still approve.
+func TestElicitationDeclineLeavesOtherChannels(t *testing.T) {
+	h := newHarness(t, fakemcp.ModeCurrent, nil)
+	h.gw.opts.ApprovalWait = 10 * time.Second
+	h.elicit = func(*mcp.ElicitParams) *mcp.ElicitResult { return &mcp.ElicitResult{Action: "decline"} }
+	events, cancel := h.q.Subscribe()
+	defer cancel()
+	go func() {
+		for e := range events {
+			if e.Status == approval.Pending {
+				time.Sleep(200 * time.Millisecond) // after the decline has come back
+				h.q.Decide(e.ID, true, config.ChanDashboard)
+				return
+			}
+		}
+	}()
+	out, isErr := h.callFake("delete_thing", map[string]any{"text": "c"})
+	if isErr || out != "deleted c" {
+		t.Fatalf("got %q err=%v", out, isErr)
+	}
+}
+
+// With elicitation as the only channel, a decline denies at once.
+func TestElicitationOnlyDeclineDenies(t *testing.T) {
+	h := newHarness(t, fakemcp.ModeCurrent, func(c *config.Config) {
+		a := c.Agents["owner"]
+		a.Approvals = []config.Channel{config.ChanElicitation}
+		c.Agents["owner"] = a
+	})
+	h.elicit = func(*mcp.ElicitParams) *mcp.ElicitResult { return &mcp.ElicitResult{Action: "cancel"} }
+	out, isErr := h.callFake("delete_thing", map[string]any{"text": "d"})
+	if !isErr || !strings.Contains(out, "not approved (denied)") {
+		t.Fatalf("got %q err=%v", out, isErr)
+	}
+}

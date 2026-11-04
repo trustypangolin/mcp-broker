@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -196,7 +197,7 @@ func TestSignInRefreshAndReauth(t *testing.T) {
 	if m.State("svc") != "signed in" {
 		t.Errorf("state: %s", m.State("svc"))
 	}
-	if f.scope != "read offline_access" {
+	if got := strings.Fields(f.scope); len(got) != 2 || !slices.Contains(got, "read") || !slices.Contains(got, "offline_access") {
 		t.Errorf("configured scopes should replace the advertised ones, plus offline_access: %q", f.scope)
 	}
 

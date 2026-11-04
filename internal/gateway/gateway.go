@@ -670,7 +670,7 @@ func (g *Gateway) approveFor(ctx context.Context, req *mcp.CallToolRequest, id i
 	defer cancel()
 
 	if canElicit {
-		go g.elicitApproval(wctx, req.Session, e)
+		go g.elicitApproval(wctx, req.Session, e, len(channels) > 1)
 	}
 	stopKeepalive := g.keepalive(wctx, req)
 	got, _ := q.Wait(wctx, e.ID)
@@ -704,7 +704,12 @@ func (g *Gateway) pending(e approval.Entry, retry string) *mcp.CallToolResult {
 
 // elicitApproval asks the user in the agent's own client. Its answer is just one channel:
 // a tray or dashboard decision may land first, in which case this prompt is cancelled.
-func (g *Gateway) elicitApproval(ctx context.Context, ss *mcp.ServerSession, e approval.Entry) {
+//
+// Only an answer to the form decides. A decline or cancel is how a client says it did
+// not ask (the VS Code extension declines within milliseconds without showing anything),
+// so while other channels are open it leaves the decision to them; with none, it denies
+// rather than leaving the call to time out.
+func (g *Gateway) elicitApproval(ctx context.Context, ss *mcp.ServerSession, e approval.Entry, others bool) {
 	res, err := ss.Elicit(ctx, &mcp.ElicitParams{
 		Mode:    "form",
 		Message: elicitMessage(e),
@@ -718,6 +723,13 @@ func (g *Gateway) elicitApproval(ctx context.Context, ss *mcp.ServerSession, e a
 	})
 	if err != nil {
 		return // cancelled because another channel decided, or the client failed; the queue's timeout covers it
+	}
+	if res.Action != "accept" {
+		g.write(audit.Event{Kind: audit.KindApproval, Agent: e.Agent, Connector: e.Connector, Tool: e.Tool, PlanID: e.ID,
+			Channel: string(config.ChanElicitation), Detail: "client answered " + res.Action + " without a decision"})
+		if others {
+			return
+		}
 	}
 	approve := res.Action == "accept" && res.Content["approve"] == true
 	g.opts.Approvals.Decide(e.ID, approve, config.ChanElicitation)
