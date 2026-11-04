@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/trustypangolin/mcp-broker/internal/approval"
 	"github.com/trustypangolin/mcp-broker/internal/config"
+	"github.com/trustypangolin/mcp-broker/internal/gateway"
 	"github.com/trustypangolin/mcp-broker/internal/identity"
 	"github.com/trustypangolin/mcp-broker/internal/server"
 	"github.com/trustypangolin/mcp-broker/internal/supervisor"
@@ -43,6 +45,7 @@ type backend struct {
 	tokens  *identity.Store
 	reloads int
 	sup     *supervisor.Supervisor
+	tools   map[string]gateway.ToolList
 }
 
 func (b *backend) Config() *config.Config { b.mu.Lock(); defer b.mu.Unlock(); return b.cfg }
@@ -63,6 +66,20 @@ func (b *backend) Approvals() *approval.Queue { return b.q }
 func (b *backend) Tokens() *identity.Store    { return b.tokens }
 func (b *backend) AdminToken() string         { return "admintoken" }
 func (b *backend) Logger() *slog.Logger       { return slog.New(slog.DiscardHandler) }
+func (b *backend) Discover(_ context.Context, name, _ string) (gateway.ToolList, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	l := b.tools[name]
+	if len(l.Tools) == 0 {
+		return l, fmt.Errorf("%s failed to start", name)
+	}
+	return l, nil
+}
+func (b *backend) Tools(name string) gateway.ToolList {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.tools[name]
+}
 func (b *backend) Supervisor() *supervisor.Supervisor {
 	b.mu.Lock()
 	defer b.mu.Unlock()

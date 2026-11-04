@@ -154,7 +154,7 @@ func Start(opts Options) (b *Broker, err error) {
 	})
 	b.gw = gateway.New(gateway.Options{
 		Config: cfg, Approvals: b.queue, Audit: b.aud, Redactor: b.red, Logger: b.log, LogDir: logDir,
-		DashboardURL: b.base + "/ui/", Supervisor: b.sup, OAuth: b.oauth,
+		ToolCache: filepath.Join(cfg.Dir, "tools-cache.json"), DashboardURL: b.base + "/ui/", Supervisor: b.sup, OAuth: b.oauth,
 	})
 	cleanup = append(cleanup, b.gw.Close)
 	b.ident = identity.New(cfg, store)
@@ -328,6 +328,14 @@ func (b *Broker) Status() server.Status {
 	}
 	slices.Sort(st.Agents)
 	return st
+}
+
+// Tools lists a connector's tools, live or as last seen, for the dashboard.
+func (b *Broker) Tools(connector string) gateway.ToolList { return b.gw.Tools(connector) }
+
+// Discover starts a connector to list its tools, for the dashboard.
+func (b *Broker) Discover(ctx context.Context, connector, agent string) (gateway.ToolList, error) {
+	return b.gw.Discover(ctx, connector, agent)
 }
 
 // Supervisor implements server.Control.

@@ -8,6 +8,7 @@
 package dashboard
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"embed"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/trustypangolin/mcp-broker/internal/approval"
 	"github.com/trustypangolin/mcp-broker/internal/config"
+	"github.com/trustypangolin/mcp-broker/internal/gateway"
 	"github.com/trustypangolin/mcp-broker/internal/identity"
 	"github.com/trustypangolin/mcp-broker/internal/server"
 )
@@ -38,6 +40,10 @@ type Backend interface {
 	Tokens() *identity.Store
 	AdminToken() string
 	Logger() *slog.Logger
+	// Tools lists a connector's tools, live or as last seen.
+	Tools(connector string) gateway.ToolList
+	// Discover starts a connector (agent's instance, for per_agent ones) to list its tools.
+	Discover(ctx context.Context, connector, agent string) (gateway.ToolList, error)
 }
 
 const (
@@ -221,6 +227,9 @@ func (d *Dashboard) Mount(mux *http.ServeMux) {
 	mux.Handle("POST /ui/api/config/check", d.api(admin, d.checkConfig))
 	mux.Handle("PUT /ui/api/config", d.api(admin, d.putConfig))
 	mux.Handle("GET /ui/api/audit", d.api(admin, d.audit))
+	mux.Handle("GET /ui/api/tree", d.api(admin, d.tree))
+	mux.Handle("POST /ui/api/rules", d.api(admin, d.setRule))
+	mux.Handle("POST /ui/api/tree/{connector}/load", d.api(admin, d.discover))
 }
 
 func (d *Dashboard) index(w http.ResponseWriter, r *http.Request) {
@@ -347,9 +356,14 @@ func (d *Dashboard) listApprovals(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Dashboard) decide(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Approve bool }
+	var body struct{ Approve, Always bool }
 	if err := decode(r, &body); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad body")
+		return
+	}
+	// "Always allow" edits policy, so it needs the admin session, not just a viewer.
+	if body.Always && (!body.Approve || !d.allowed(r, admin)) {
+		jsonError(w, http.StatusForbidden, "always allow needs an approval from a signed-in admin")
 		return
 	}
 	e, err := d.b.Approvals().Decide(r.PathValue("id"), body.Approve, config.ChanDashboard)
@@ -358,6 +372,8 @@ func (d *Dashboard) decide(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, err.Error())
 	case err != nil:
 		jsonError(w, http.StatusConflict, err.Error())
+	case body.Always:
+		d.alwaysAllow(w, e)
 	default:
 		writeJSON(w, e)
 	}

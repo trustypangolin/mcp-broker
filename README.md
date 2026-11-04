@@ -65,6 +65,30 @@ connectors:
     args: [mcp]
 ```
 
+The **Tools** page is a tree per agent: group → connector → tool. Each tool shows what a
+call does right now (**Allow**, **Ask** or **Deny**), the reason, and how often the agent
+was asked about it. Tools that keep asking are listed at the top under **Asking you every
+time**. Each tool and connector has an **Inherit / Allow / Ask / Deny** switch. The switch
+writes a rule to the agent's role, so agents that share the role get the same rule:
+
+```yaml
+roles:
+  owner:
+    rules:
+      - match: aws-luton-shared-readonly/aws___run_script   # one tool: goes first
+        action: allow
+      - match: excel-live/*                                  # a whole connector: goes last
+        action: approve
+```
+
+**Inherit** removes the rule. Global `policy.floors` still win, and the switch shows them
+as locked. **Approve + always allow** on an approval card approves the call and writes the
+same allow rule for that tool.
+
+The tree reads each connector's tools from the running instance. When a connector isn't
+running, it uses the list saved the last time it ran (`tools-cache.json`). **Load tools**
+starts a connector that has never run.
+
 ## AWS accounts
 
 **Connectors → AWS profiles…** lists the profiles in `~/.aws/config` and attaches any of

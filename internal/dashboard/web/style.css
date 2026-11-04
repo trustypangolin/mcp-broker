@@ -107,3 +107,23 @@ header .brand { flex: 0 0 auto; }
 .group > .fold-body { padding-left: 14px; }
 .checks.col { flex-direction: column; gap: 4px; max-height: 40vh; overflow-y: auto; }
 @media (max-width: 700px) { .group > .fold-body { padding-left: 6px; } }
+
+/* tools tree */
+.small { font-size: 12px; }
+.seg { display: inline-flex; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 2px 9px; font-size: 12px; background: var(--surface); }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.on.inherit { background: var(--code); font-weight: 600; }
+.seg button.on.allow { background: var(--ok); color: #fff; }
+.seg button.on.approve { background: var(--warn); color: #fff; }
+.seg button.on.deny { background: var(--bad); color: #fff; }
+.tool-list { border-left: 2px solid var(--line); margin: 6px 0 0 4px; }
+.tool-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0 6px 14px; position: relative; }
+.tool-row::before { content: ""; position: absolute; left: 0; top: 50%; width: 10px; border-top: 2px solid var(--line); }
+.tool-row + .tool-row { border-top: 1px solid var(--line); }
+.tool-row.hot { background: color-mix(in srgb, var(--warn) 9%, transparent); }
+.tool-main { flex: 1 1 260px; min-width: 0; }
+.tool-why { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pill.lock { color: var(--muted); border-style: dashed; }
+.hot-list { border-color: var(--warn); }
+.fold-head > .seg { margin-left: auto; }

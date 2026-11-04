@@ -18,6 +18,9 @@ type Decision struct {
 	// invisible targets as unknown, not as forbidden.
 	Visible bool
 	Reason  string // human-readable trail, safe to show the user and write to the audit log
+	// Floor is the strictest global floor that matches, whether or not it changed the
+	// decision: no role rule can make the call laxer than this. Empty when none matches.
+	Floor config.Action
 }
 
 // Engine evaluates policy against one loaded config. Reloading the config means building a
@@ -135,6 +138,11 @@ func (e *Engine) applyFloors(d *Decision, key string) {
 	for _, f := range e.cfg.Policy.Floors {
 		if !glob.Match(f.Match, key) {
 			continue
+		}
+		if d.Floor == "" {
+			d.Floor = f.Action
+		} else {
+			d.Floor = config.Stricter(d.Floor, f.Action)
 		}
 		if next := config.Stricter(d.Action, f.Action); next != d.Action {
 			d.Action = next

@@ -259,6 +259,10 @@ pages.approvals = async (main) => {
       e.reason && h("div", { class: "hint" }, e.reason),
       h("div", { class: "row", style: "margin-top:10px" },
         h("button", { class: "approve", onclick: (ev) => decide(ev.target, e.id, true) }, "Approve"),
+        me.admin && e.kind === "tool.call" && h("button", {
+          title: "Approve this call, and let " + e.agent + "'s role call " + e.tool + " without asking from now on",
+          onclick: (ev) => decideAlways(ev.target, e),
+        }, "Approve + always allow"),
         h("button", { class: "deny", onclick: (ev) => decide(ev.target, e.id, false) }, "Deny"),
         h("span", { class: "muted grow" }, "expires " + new Date(e.expires).toLocaleTimeString()))));
   fill(main,
@@ -278,6 +282,18 @@ async function decide(btn, id, approve) {
   await run(btn, async () => {
     await api("POST", "approvals/" + id, { approve });
     toast(approve ? "Approved" : "Denied");
+  });
+  refreshStatus();
+  if (current === "approvals") route();
+}
+
+// decideAlways approves the call and writes an allow rule for the tool to the agent's role.
+async function decideAlways(btn, e) {
+  const tree = await api("GET", "tree").catch(() => ({ agents: [] }));
+  const ag = tree.agents.find((a) => a.name === e.agent);
+  if (!(await confirmRisky(e.connector + "/" + e.tool, e.class, ag ? ag.role : "of " + e.agent, ag && ag.shares))) return;
+  await run(btn, async () => {
+    toast("Approved. " + reloadSummary(await api("POST", "approvals/" + e.id, { approve: true, always: true })));
   });
   refreshStatus();
   if (current === "approvals") route();
@@ -657,6 +673,163 @@ async function removeAgent(btn, name) {
   if (!confirm("Remove agent " + name + " and revoke its tokens?")) return;
   await run(btn, async () => { toast(reloadSummary(await api("DELETE", "agents/" + encodeURIComponent(name)))); route(); });
 }
+
+// ---- tools: per-agent policy tree ----
+
+const actLabel = { allow: "Allow", approve: "Ask", deny: "Deny" };
+const strictness = { allow: 0, approve: 1, deny: 2 };
+// Classes whose tools can change or leak things: allowing them without asking gets a warning.
+const riskyClass = new Set(["destructive", "external", "spend", "exec"]);
+const treeAgentKey = "mcpb.treeAgent";
+
+// confirmRisky asks before allowing a tool of a risky class without approval.
+function confirmRisky(what, cls, role, shares) {
+  if (!riskyClass.has(cls)) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let ok = false;
+    const d = dialog("Allow " + what + " without asking?",
+      h("div", {},
+        h("p", {}, "This is a ", h("b", {}, cls), " tool. Allowing it means every call runs straight away, whatever its arguments."),
+        h("p", { class: "muted" }, "Applies to role ", h("b", {}, role), shares && shares.length ? " (also " + shares.join(", ") + ")" : "",
+          ". Credentials are the real limit, such as a read-only AWS role.")),
+      (close) => [
+        h("button", { onclick: close }, "Cancel"),
+        h("button", { class: "primary", onclick: () => { ok = true; close(); } }, "Allow without asking")]);
+    d.addEventListener("close", () => resolve(ok));
+  });
+}
+
+// seg is an Inherit / Allow / Ask / Deny switch for one rule. Choices laxer than a floor
+// are disabled: the floor would override them.
+function seg(cur, floor, onpick) {
+  return h("div", { class: "seg", role: "group" }, ["", "allow", "approve", "deny"].map((a) => {
+    const blocked = a && floor && strictness[a] < strictness[floor];
+    return h("button", {
+      class: (cur || "") === a ? "on " + (a || "inherit") : "",
+      disabled: blocked || undefined,
+      "aria-pressed": String((cur || "") === a),
+      title: blocked ? "A global floor keeps this at " + actLabel[floor] + " or stricter" : a ? "Rule: " + actLabel[a] : "No rule: follow the class and connector settings",
+      onclick: (ev) => (cur || "") !== a && onpick(ev.target, a),
+    }, a ? actLabel[a] : "Inherit");
+  }));
+}
+
+const useText = (t) => [
+  t.asked ? "asked " + t.asked + "×" + (t.approved === t.asked ? ", all approved" : ", approved " + t.approved) : t.calls ? t.calls + " call" + (t.calls > 1 ? "s" : "") : "",
+  t.last ? ago(t.last) : "",
+].filter(Boolean).join(" · ");
+
+pages.tools = async (main) => {
+  let agent = "";
+  try { agent = localStorage.getItem(treeAgentKey) || ""; } catch { /* private window */ }
+  let data;
+  let filter = "";
+  const tree = h("div", {});
+  const head = h("div", {});
+
+  const load = async () => {
+    data = await api("GET", "tree?agent=" + encodeURIComponent(agent));
+    if (!data.agent && data.agents.length) {
+      agent = data.agents.find((a) => a.name === "claude-desktop")?.name || data.agents[0].name;
+      data = await api("GET", "tree?agent=" + encodeURIComponent(agent));
+    }
+  };
+
+  const setRule = async (btn, conn, tool, action, cls) => {
+    const me_ = data.agents.find((a) => a.name === agent) || {};
+    if (action === "allow" && !(await confirmRisky(tool === "*" ? "every " + conn + " tool" : conn + "/" + tool, tool === "*" ? "destructive" : cls, data.role, me_.shares))) return;
+    await run(btn, async () => {
+      const r = await api("POST", "rules", { role: data.role, connector: conn, tool, action });
+      toast(reloadSummary(r));
+      await load();
+      draw();
+    });
+  };
+
+  const toolRow = (c, t, withConn) => h("div", { class: "tool-row" + (t.asked && t.action === "approve" ? " hot" : "") },
+    h("div", { class: "tool-main" },
+      h("div", { class: "row" },
+        h("code", {}, withConn ? c.name + "/" + t.name : t.name),
+        h("span", { class: "pill " + t.action, title: t.reason }, actLabel[t.action]),
+        h("span", { class: "pill" }, t.class),
+        t.floor && h("span", { class: "pill lock", title: "A global floor keeps this at " + actLabel[t.floor] + " or stricter" }, "floor: " + actLabel[t.floor]),
+        h("span", { class: "muted small" }, useText(t))),
+      h("div", { class: "tool-why", title: t.description || "" }, t.reason, t.description && [" · ", t.description])),
+    seg(t.rule, t.floor, (btn, a) => setRule(btn, c.name, t.name, a, t.class)));
+
+  const match = (c, t) => !filter || (c.name + "/" + t.name).toLowerCase().includes(filter) || (t.description || "").toLowerCase().includes(filter);
+
+  const draw = () => {
+    const ag = data.agents.find((a) => a.name === agent);
+    const select = h("select", { onchange: async (ev) => {
+      agent = ev.target.value;
+      try { localStorage.setItem(treeAgentKey, agent); } catch { /* private window */ }
+      await run(null, async () => { await load(); draw(); });
+    } }, data.agents.map((a) => h("option", { value: a.name, selected: a.name === agent || undefined }, a.name + " (" + a.role + ")")));
+    fill(head,
+      h("div", { class: "row spread" }, h("h2", {}, "Tools"),
+        h("div", { class: "row" },
+          select,
+          h("button", { class: "link", onclick: () => foldAll(tree, false) }, "Expand all"),
+          h("button", { class: "link", onclick: () => foldAll(tree, true) }, "Collapse all"))),
+      h("p", { class: "muted" },
+        "What each tool does when ", h("b", {}, agent), " calls it: ",
+        h("span", { class: "pill allow" }, "Allow"), " runs, ", h("span", { class: "pill approve" }, "Ask"), " waits for your approval, ",
+        h("span", { class: "pill deny" }, "Deny"), " is refused and hidden. Rules are saved to role ", h("b", {}, data.role),
+        ag && ag.shares && ag.shares.length ? [", so they also apply to ", h("b", {}, ag.shares.join(", "))] : "",
+        ". A rule on a tool beats one on its connector."));
+
+    const conns = data.connectors || [];
+    const hot = conns.flatMap((c) => c.tools.filter((t) => t.asked && t.action === "approve" && match(c, t)).map((t) => [c, t]))
+      .sort((a, b) => b[1].asked - a[1].asked);
+    const card = (c) => {
+      const tools = c.tools.filter((t) => match(c, t));
+      const n = { allow: 0, approve: 0, deny: 0 };
+      for (const t of c.tools) n[t.action]++;
+      const asked = c.tools.reduce((s, t) => s + (t.action === "approve" ? t.asked || 0 : 0), 0);
+      const known = c.seen || c.tools.length;
+      // While filtering, matches show open without touching the remembered fold state.
+      return fold(filter ? "tools:filter:" + c.name : "tools:" + agent + ":" + c.name, !filter, "card", [
+        h("h3", {}, c.name,
+          c.live ? h("span", { class: "pill on" }, "running") : known ? h("span", { class: "pill", title: "Tool list from " + new Date(c.seen).toLocaleString() }, "as of " + ago(c.seen)) : h("span", { class: "pill" }, "tools unknown"),
+          known && h("span", { class: "muted small" }, [n.allow && n.allow + " allow", n.approve && n.approve + " ask", n.deny && n.deny + " deny"].filter(Boolean).join(" · ")),
+          asked > 0 && h("span", { class: "pill approve" }, "asked " + asked + "×")),
+        !c.live && h("button", {
+          class: "link", title: "Start " + c.name + " to read its current tool list; it stops again when idle",
+          onclick: (ev) => run(ev.target, async () => {
+            ev.target.textContent = "Starting…";
+            const r = await api("POST", "tree/" + encodeURIComponent(c.name) + "/load?agent=" + encodeURIComponent(agent));
+            toast(c.name + ": " + r.tools + " tools");
+            await load();
+            draw();
+          }),
+        }, known ? "Refresh tools" : "Load tools"),
+        h("span", { class: "muted small" }, "All tools:"),
+        seg(c.rule, "", (btn, a) => setRule(btn, c.name, "*", a, ""))], [
+        c.description && h("div", { class: "muted" }, c.description),
+        !known && h("div", { class: "hint" }, "This connector hasn't run since the broker began saving tool lists. Load tools starts it to read them; a rule for all of its tools works without that."),
+        known && h("div", { class: "tool-list" }, tools.length ? tools.map((t) => toolRow(c, t)) : h("div", { class: "muted" }, "No tools match.")),
+      ]);
+    };
+    const visible = filter ? conns.filter((c) => c.tools.some((t) => match(c, t)) || c.name.includes(filter)) : conns;
+    fill(tree,
+      hot.length > 0 && h("div", { class: "card hot-list" },
+        h("h3", {}, "Asking you every time"),
+        h("div", { class: "hint" }, "Tools ", agent, " has called that still need approval. Set Allow to stop the prompts."),
+        h("div", { class: "tool-list" }, hot.map(([c, t]) => toolRow(c, t, true)))),
+      visible.length ? grouped("tools", visible, (c) => c.name, card, false) : h("div", { class: "card empty" }, "No connectors match."));
+  };
+
+  const search = h("input", { placeholder: "Filter tools", type: "search" });
+  search.addEventListener("input", () => { filter = search.value.trim().toLowerCase(); draw(); });
+  await load();
+  if (!data.agents.length) {
+    fill(main, h("h2", {}, "Tools"), h("div", { class: "card empty" }, "No agents configured. Add one on the Agents tab."));
+    return;
+  }
+  fill(main, head, h("div", { class: "row", style: "margin-bottom:10px" }, search), tree);
+  draw();
+};
 
 // ---- raw config ----
 

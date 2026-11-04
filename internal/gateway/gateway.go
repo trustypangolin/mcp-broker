@@ -47,6 +47,9 @@ type Options struct {
 	DashboardURL string
 	// LogDir receives one stderr log per local connector; empty disables.
 	LogDir string
+	// ToolCache is where each connector's last-seen tool list is kept, so the dashboard
+	// can show tools of connectors that are not running; empty keeps it in memory only.
+	ToolCache string
 	// Identity extracts the caller from a request. Defaults to IdentityFromRequest.
 	Identity func(*mcp.CallToolRequest) identity.Identity
 	// ApprovalWait is how long call_tool blocks for an out-of-band approval before
@@ -63,6 +66,9 @@ type Gateway struct {
 
 	mu    sync.Mutex
 	conns map[string]*downstream
+
+	catMu   sync.Mutex
+	catalog map[string]ToolList // connector name → tools, loaded on first use
 
 	stop chan struct{}
 	done sync.WaitGroup
