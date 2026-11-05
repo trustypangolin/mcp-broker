@@ -9,6 +9,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 )
@@ -224,6 +226,26 @@ func shellQuote(s string) string {
 		return s
 	}
 	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
+}
+
+// ShimExe is the mcp-broker binary the shim runs as. The dashboard runs inside the tray
+// (mcp-broker-tray.exe), so it uses the mcp-broker binary installed next to the running
+// one, never the running one.
+func ShimExe() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if r, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = r
+	}
+	return ShimNextTo(exe), nil
+}
+
+// ShimNextTo is the mcp-broker binary in the same folder as exe, with exe's extension.
+func ShimNextTo(exe string) string {
+	ext := filepath.Ext(exe)
+	return filepath.Join(filepath.Dir(exe), "mcp-broker"+ext)
 }
 
 // WSLPath turns a Windows path into the /mnt/<drive>/... path a WSL client runs it by.

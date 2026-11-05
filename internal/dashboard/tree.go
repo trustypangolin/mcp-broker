@@ -245,7 +245,7 @@ func (d *Dashboard) clientConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"harnesses": clientcfg.Harnesses()})
 		return
 	}
-	exe, err := os.Executable()
+	exe, err := clientcfg.ShimExe()
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return

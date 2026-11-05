@@ -2,6 +2,7 @@ package clientcfg
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -82,6 +83,19 @@ func TestRenderShapes(t *testing.T) {
 	}
 	if !strings.Contains(get("vscode", true).Text, `"password": true`) {
 		t.Error("vscode token input isn't a password")
+	}
+}
+
+func TestShimNextTo(t *testing.T) {
+	// The dashboard runs in the tray; snippets must name the CLI next to it.
+	for in, want := range map[string]string{
+		filepath.Join("dist", "mcp-broker-tray.exe"): filepath.Join("dist", "mcp-broker.exe"),
+		filepath.Join("dist", "mcp-broker.exe"):      filepath.Join("dist", "mcp-broker.exe"),
+		filepath.Join("bin", "mcp-broker-tray"):      filepath.Join("bin", "mcp-broker"),
+	} {
+		if got := ShimNextTo(in); got != want {
+			t.Errorf("ShimNextTo(%s) = %s, want %s", in, got, want)
+		}
 	}
 }
 

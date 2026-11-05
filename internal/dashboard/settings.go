@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/trustypangolin/mcp-broker/internal/clientcfg"
 	"github.com/trustypangolin/mcp-broker/internal/config"
 	"github.com/trustypangolin/mcp-broker/internal/gateway"
 	"github.com/trustypangolin/mcp-broker/internal/identity"
@@ -231,7 +232,7 @@ func (d *Dashboard) listAgents(w http.ResponseWriter, _ *http.Request) {
 	cfg := d.b.Config()
 	pol := policy.New(cfg)
 	tokens := d.b.Tokens().List()
-	exe, _ := os.Executable()
+	exe, _ := clientcfg.ShimExe()
 	out := []agentView{}
 	for _, name := range slices.Sorted(maps.Keys(cfg.Agents)) {
 		a := cfg.Agents[name]
