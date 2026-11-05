@@ -145,6 +145,9 @@ connectors:
     args: [--directory, G:/Ai/MCP/excel-mcp-live, run, excel_mcp_server.py]
     env: {MCP_AUTHOR: Benjamin Luton}
     idle_unload: 30m
+    tool_classes:
+      get_merge_info: read                  # "merge" reads as a write verb
+      list_conditional_format_rules: read   # "format" reads as a write verb
 
   word-live:
     description: Live edit of documents open in Word, plus .docx tools
