@@ -19,6 +19,10 @@ type ToolMeta struct {
 	Name            string `json:"name"`
 	Description     string `json:"description,omitempty"`
 	DestructiveHint *bool  `json:"destructive_hint,omitempty"`
+	// Bytes is the size of the tool's entry in a load_connector result (name, full
+	// description, input schema): what it costs an agent's context. 0 when unknown (a cache
+	// written before sizes were kept).
+	Bytes int `json:"bytes,omitempty"`
 }
 
 // Annotations returns the hints the classifier considers.
@@ -40,7 +44,7 @@ const maxToolDesc = 240
 func metaOf(tools []*mcp.Tool) []ToolMeta {
 	out := make([]ToolMeta, 0, len(tools))
 	for _, t := range tools {
-		m := ToolMeta{Name: t.Name, Description: t.Description}
+		m := ToolMeta{Name: t.Name, Description: t.Description, Bytes: entryBytes(t)}
 		if r := []rune(m.Description); len(r) > maxToolDesc {
 			m.Description = string(r[:maxToolDesc]) + "…"
 		}
@@ -50,6 +54,55 @@ func metaOf(tools []*mcp.Tool) []ToolMeta {
 		out = append(out, m)
 	}
 	return out
+}
+
+// entryBytes is the size of a tool's entry in load_connector's result, laid out as it is
+// there: indented, as an element of the tools array. Class and requires_approval vary by
+// agent; the longest values are counted.
+func entryBytes(t *mcp.Tool) int {
+	b, err := json.MarshalIndent(toolInfo{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema, Class: "destructive", Approval: true}, "    ", "  ")
+	if err != nil {
+		return 0
+	}
+	return len(b) + len(",\n    ")
+}
+
+// LoadWrapperBytes is what load_connector's result adds around the tools of a connector
+// named name.
+func LoadWrapperBytes(name string) int {
+	b, _ := json.MarshalIndent(map[string]any{"connector": name, "tools": []int{}}, "", "  ")
+	return len(b) + len("\n  ")
+}
+
+// BrokerContextBytes is what every agent's context holds before it loads any connector: the
+// broker's own tool definitions and its server instructions. It is measured once, by
+// listing the tools through an in-memory client, so it always matches what is registered.
+func (g *Gateway) BrokerContextBytes() int {
+	g.baseOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		srvT, cliT := mcp.NewInMemoryTransports()
+		ss, err := g.Server().Connect(ctx, srvT, nil)
+		if err != nil {
+			return
+		}
+		defer ss.Close()
+		cs, err := mcp.NewClient(&mcp.Implementation{Name: "mcp-broker-size"}, nil).Connect(ctx, cliT, nil)
+		if err != nil {
+			return
+		}
+		defer cs.Close()
+		res, err := cs.ListTools(ctx, nil)
+		if err != nil {
+			return
+		}
+		b, _ := json.Marshal(res.Tools)
+		g.baseBytes = len(b)
+		if ir := cs.InitializeResult(); ir != nil {
+			g.baseBytes += len(ir.Instructions)
+		}
+	})
+	return g.baseBytes
 }
 
 // remember records a connector's tool list and saves the catalog, so the dashboard can show

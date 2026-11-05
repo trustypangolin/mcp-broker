@@ -104,6 +104,20 @@ roles:
 as locked. **Approve + always allow** on an approval card approves the call and writes the
 same allow rule for that tool.
 
+The tree also estimates **context cost** in tokens (JSON bytes divided by 4). Different
+models tokenize differently, so the figures are rough. It shows:
+
+- the **broker context**: the meta-tools and instructions every agent starts with;
+- for each connector, what one `load_connector` adds for the selected agent, and the total
+  for each group;
+- for each tool, its own size.
+
+Connectors and groups are marked **light** (under 2K), **medium** (2K–10K) or **heavy** (over
+10K), with the level written out as well as coloured. A denied tool is left out of that
+agent's `load_connector`, so it costs nothing. Setting **Deny** on tools an agent doesn't
+need shrinks its context too. A "+" means some tool sizes aren't known yet: **Refresh tools**
+measures them.
+
 The tree reads each connector's tools from the running instance. When a connector isn't
 running, it uses the list saved the last time it ran (`tools-cache.json`). **Load tools**
 starts a connector that has never run.

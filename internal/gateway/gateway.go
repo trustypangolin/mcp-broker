@@ -70,6 +70,9 @@ type Gateway struct {
 	catMu   sync.Mutex
 	catalog map[string]ToolList // connector name → tools, loaded on first use
 
+	baseOnce  sync.Once
+	baseBytes int // BrokerContextBytes
+
 	stop chan struct{}
 	done sync.WaitGroup
 }

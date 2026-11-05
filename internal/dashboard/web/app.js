@@ -145,7 +145,7 @@ function foldAll(root, v) {
 
 // grouped lays items out under collapsible group headings, named groups first, then the
 // ungrouped ones. section is "connectors" or "profiles"; card(item) renders one item.
-function grouped(section, items, nameOf, card, admin) {
+function grouped(section, items, nameOf, card, admin, headExtra) {
   const groups = new Map();
   for (const it of items) {
     const g = it.group || "";
@@ -160,6 +160,7 @@ function grouped(section, items, nameOf, card, admin) {
     const head = h("div", { class: "row grow" },
       h("span", { class: "group-name" }, g || "Ungrouped"),
       h("span", { class: "muted" }, String(members.length)),
+      headExtra && headExtra(members),
       h("span", { class: "grow" }),
       admin && g && h("button", { class: "link", onclick: () => groupDialog(section, items, nameOf, { rename: g }) }, "Rename"),
       admin && g && h("button", { class: "link", onclick: (ev) => setGroup(ev.target, section, members.map(nameOf), "") }, "Ungroup"));
@@ -920,6 +921,21 @@ function seg(cur, floor, onpick) {
   }));
 }
 
+// Context cost: estimated tokens (JSON bytes / 4), banded light / medium / heavy. The band
+// is always written out as well as coloured.
+const fmtTok = (n) => (n < 1000 ? String(n) : (n / 1000).toFixed(n < 10000 ? 1 : 0).replace(/\.0$/, "") + "K");
+const costLevel = (n) => (n < 2000 ? "light" : n <= 10000 ? "medium" : "heavy");
+const levelPill = { light: "allow", medium: "approve", heavy: "deny" };
+function costPill(tokens, sized, what) {
+  if (!tokens) return null;
+  const lvl = costLevel(tokens);
+  return h("span", {
+    class: "pill cost " + levelPill[lvl],
+    title: "Estimated context " + what + ": about " + tokens.toLocaleString() + " tokens (JSON bytes / 4; models tokenize differently)." +
+      (sized === false ? " Some tools' sizes aren't known yet: Refresh tools to measure them." : ""),
+  }, "~" + fmtTok(tokens) + (sized === false ? "+" : "") + " tokens · " + lvl);
+}
+
 const useText = (t) => [
   t.asked ? "asked " + t.asked + "×" + (t.approved === t.asked ? ", all approved" : ", approved " + t.approved) : t.calls ? t.calls + " call" + (t.calls > 1 ? "s" : "") : "",
   t.last ? ago(t.last) : "",
@@ -959,7 +975,9 @@ pages.tools = async (main) => {
         h("span", { class: "pill " + t.action, title: t.reason }, actLabel[t.action]),
         h("span", { class: "pill" }, t.class),
         t.floor && h("span", { class: "pill lock", title: "A global floor keeps this at " + actLabel[t.floor] + " or stricter" }, "floor: " + actLabel[t.floor]),
-        h("span", { class: "muted small" }, useText(t))),
+        h("span", { class: "muted small" }, useText(t)),
+        t.tokens > 0 && h("span", { class: "muted small tok", title: t.action === "deny" ? "Hidden from this agent, so it costs it nothing" : "Estimated tokens this tool adds to load_connector" },
+          "~" + fmtTok(t.tokens) + (t.action === "deny" ? " (hidden)" : ""))),
       h("div", { class: "tool-why", title: t.description || "" }, t.reason, t.description && [" · ", t.description])),
     seg(t.rule, t.floor, (btn, a) => setRule(btn, c.name, t.name, a, t.class)));
 
@@ -999,6 +1017,7 @@ pages.tools = async (main) => {
         h("h3", {}, c.name,
           c.live ? h("span", { class: "pill on" }, "running") : known ? h("span", { class: "pill", title: "Tool list from " + new Date(c.seen).toLocaleString() }, "as of " + ago(c.seen)) : h("span", { class: "pill" }, "tools unknown"),
           known && h("span", { class: "muted small" }, [n.allow && n.allow + " allow", n.approve && n.approve + " ask", n.deny && n.deny + " deny"].filter(Boolean).join(" · ")),
+          known && costPill(c.tokens, c.sized, "of load_connector " + c.name),
           asked > 0 && h("span", { class: "pill approve" }, "asked " + asked + "×")),
         !c.live && h("button", {
           class: "link", title: "Start " + c.name + " to read its current tool list; it stops again when idle",
@@ -1018,12 +1037,19 @@ pages.tools = async (main) => {
       ]);
     };
     const visible = filter ? conns.filter((c) => c.tools.some((t) => match(c, t)) || c.name.includes(filter)) : conns;
+    const sum = (cs) => cs.reduce((s, c) => s + (c.tokens || 0), 0);
+    const groupCost = (members) => costPill(sum(members), members.every((c) => c.sized), "of loading every connector in this group");
+    const everything = (data.broker_tokens || 0) + sum(conns);
     fill(tree,
+      data.broker_tokens > 0 && h("div", { class: "card context-card" },
+        h("div", { class: "row" }, h("b", {}, "Broker context"), costPill(data.broker_tokens, true, "every agent starts with")),
+        h("div", { class: "hint" }, "The meta-tools and instructions ", agent, " starts with. A connector's tools only reach its context when it calls load_connector, at the cost shown on each connector. ",
+          "Denying a tool hides it from load_connector, so it costs nothing. Loading everything would come to about ", h("b", {}, fmtTok(everything)), " tokens.")),
       hot.length > 0 && h("div", { class: "card hot-list" },
         h("h3", {}, "Asking you every time"),
         h("div", { class: "hint" }, "Tools ", agent, " has called that still need approval. Set Allow to stop the prompts."),
         h("div", { class: "tool-list" }, hot.map(([c, t]) => toolRow(c, t, true)))),
-      visible.length ? grouped("tools", visible, (c) => c.name, card, false) : h("div", { class: "card empty" }, "No connectors match."));
+      visible.length ? grouped("tools", visible, (c) => c.name, card, false, groupCost) : h("div", { class: "card empty" }, "No connectors match."));
   };
 
   const search = h("input", { placeholder: "Filter tools", type: "search" });

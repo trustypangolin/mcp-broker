@@ -77,6 +77,9 @@ th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: upp
 dialog { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--text); width: min(720px, 94vw); padding: 16px 20px; }
 dialog::backdrop { background: rgba(0,0,0,.4); }
 dialog.wide { width: min(1040px, 96vw); }
+.pill.cost { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tok { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.context-card { margin-bottom: 10px; }
 .import-item { margin: 8px 0; padding: 10px 12px; }
 .import-item pre { margin: 6px 0; white-space: pre-wrap; word-break: break-all; }
 .import-item ul { margin: 4px 0 4px 18px; padding: 0; }

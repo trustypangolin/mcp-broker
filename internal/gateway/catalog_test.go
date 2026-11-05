@@ -1,13 +1,45 @@
 package gateway
 
 import (
+	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/trustypangolin/mcp-broker/internal/config"
+	"github.com/trustypangolin/mcp-broker/internal/testutil/fakemcp"
 )
+
+// The estimates are what load_connector really returns: the per-tool sizes plus the
+// wrapper come to the result's text, give or take the per-agent class labels.
+func TestContextSizesMatchLoadConnector(t *testing.T) {
+	h := newHarness(t, fakemcp.ModeCurrent, nil)
+	out, isErr := h.call("load_connector", map[string]any{"name": "fake"})
+	if isErr {
+		t.Fatal(out)
+	}
+	est := LoadWrapperBytes("fake")
+	for _, tm := range h.gw.Tools("fake").Tools {
+		est += tm.Bytes
+	}
+	// The estimate counts every tool as "destructive" with requires_approval: never under.
+	if est < len(out) || est > len(out)+len(h.gw.Tools("fake").Tools)*40 {
+		t.Errorf("estimate %d bytes, load_connector returned %d", est, len(out))
+	}
+
+	// The broker's own share: its tool list and instructions.
+	res, err := h.session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(res.Tools)
+	want := len(b) + len(h.session.InitializeResult().Instructions)
+	if got := h.gw.BrokerContextBytes(); got != want {
+		t.Errorf("broker context %d bytes, want %d", got, want)
+	}
+}
 
 func TestToolCacheSurvivesRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tools-cache.json")
@@ -31,6 +63,10 @@ func TestToolCacheSurvivesRestart(t *testing.T) {
 	}
 	if h := l.Tools[1].DestructiveHint; h == nil || !*h {
 		t.Error("destructive hint lost")
+	}
+	// The size counts the whole description, though the cache keeps a short one.
+	if b := l.Tools[0].Bytes; b < 1000 || l.Tools[1].Bytes == 0 {
+		t.Errorf("sizes after restart: %d, %d", b, l.Tools[1].Bytes)
 	}
 	if l := g.Tools("never-ran"); len(l.Tools) != 0 || !l.Seen.IsZero() {
 		t.Errorf("unknown connector = %+v", l)

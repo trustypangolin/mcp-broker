@@ -81,7 +81,8 @@ func (b *backend) SignIn(name string) (string, error) {
 	}
 	return "https://as.example/authorize?client_id=dyn", nil
 }
-func (b *backend) SignOut(string) error { return nil }
+func (b *backend) SignOut(string) error    { return nil }
+func (b *backend) BrokerContextBytes() int { return 6000 }
 func (b *backend) Tools(name string) gateway.ToolList {
 	b.mu.Lock()
 	defer b.mu.Unlock()

@@ -51,6 +51,45 @@ func toolsOf(t *testing.T, out map[string]any, conn string) map[string]map[strin
 	return nil
 }
 
+// connectorOf finds a connector in a tree response.
+func connectorOf(out map[string]any, conn string) map[string]any {
+	for _, c := range out["connectors"].([]any) {
+		if c := c.(map[string]any); c["name"] == conn {
+			return c
+		}
+	}
+	return nil
+}
+
+// Context estimates: per tool, per connector for the agent (denied tools are hidden from
+// it, so they cost nothing), and the broker's own share.
+func TestToolTreeContextCost(t *testing.T) {
+	f := newFixture(t, treeBase)
+	f.b.tools = map[string]gateway.ToolList{
+		"aws":  {Tools: []gateway.ToolMeta{{Name: "run_script", Bytes: 4000}, {Name: "list_regions", Bytes: 400}}},
+		"fake": {Tools: []gateway.ToolMeta{{Name: "old", Bytes: 0}}}, // cached by an older broker
+	}
+	f.signIn()
+	_, out := f.do("GET", "/ui/api/tree?agent=code", nil, nil)
+	if out["broker_tokens"] != float64(1500) {
+		t.Errorf("broker_tokens = %v", out["broker_tokens"])
+	}
+	aws := connectorOf(out, "aws")
+	before := aws["tokens"].(float64)
+	if aws["sized"] != true || before < 1100 || before > 1200 || toolsOf(t, out, "aws")["run_script"]["tokens"] != float64(1000) {
+		t.Errorf("aws = %v", aws)
+	}
+	if connectorOf(out, "fake")["sized"] != false {
+		t.Error("a tool without a size should mark the connector unsized")
+	}
+
+	f.do("POST", "/ui/api/rules", map[string]any{"role": "owner", "connector": "aws", "tool": "run_script", "action": "deny"}, nil)
+	_, out = f.do("GET", "/ui/api/tree?agent=code", nil, nil)
+	if after := connectorOf(out, "aws")["tokens"].(float64); before-after != 1000 {
+		t.Errorf("denying run_script: %v → %v tokens, want 1000 fewer", before, after)
+	}
+}
+
 func TestToolTree(t *testing.T) {
 	f := newFixture(t, treeBase)
 	f.b.tools = map[string]gateway.ToolList{"aws": {Tools: []gateway.ToolMeta{

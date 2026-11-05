@@ -16,6 +16,7 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/audit"
 	"github.com/trustypangolin/mcp-broker/internal/clientcfg"
 	"github.com/trustypangolin/mcp-broker/internal/config"
+	"github.com/trustypangolin/mcp-broker/internal/gateway"
 	"github.com/trustypangolin/mcp-broker/internal/policy"
 )
 
@@ -34,6 +35,8 @@ type treeTool struct {
 	Reason      string        `json:"reason"`
 	Rule        config.Action `json:"rule,omitempty"`  // the role's rule for exactly this tool
 	Floor       config.Action `json:"floor,omitempty"` // strictest floor that matches: the tool can't be laxer
+	// Tokens estimates the tool's entry in load_connector's result; 0 when unknown.
+	Tokens int `json:"tokens,omitempty"`
 	toolUse
 }
 
@@ -45,6 +48,11 @@ type treeConnector struct {
 	Seen        time.Time     `json:"seen,omitzero"`  // when the tool list was taken; zero: never ran
 	Rule        config.Action `json:"rule,omitempty"` // the role's <connector>/* rule
 	Tools       []treeTool    `json:"tools"`
+	// Tokens estimates what one load_connector adds to this agent's context: the tools it
+	// can see (denied ones are hidden from it) and the result's wrapper. Sized is false when
+	// some tool's size is unknown (a cache from an older broker: load the tools again).
+	Tokens int  `json:"tokens"`
+	Sized  bool `json:"sized"`
 }
 
 // toolUse is what the audit log says an agent did with a tool.
@@ -105,11 +113,32 @@ func (d *Dashboard) tree(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		slices.SortFunc(c.Tools, func(a, b treeTool) int { return strings.Compare(a.Name, b.Name) })
+		size := map[string]int{}
+		c.Sized = len(list.Tools) > 0
+		for _, t := range list.Tools {
+			size[t.Name] = t.Bytes
+			c.Sized = c.Sized && t.Bytes > 0
+		}
+		bytes := gateway.LoadWrapperBytes(name)
+		for i, t := range c.Tools {
+			c.Tools[i].Tokens = tokens(size[t.Name])
+			if t.Action != config.Deny { // denied tools are left out of the agent's load_connector
+				bytes += size[t.Name]
+			}
+		}
+		if len(list.Tools) > 0 {
+			c.Tokens = tokens(bytes)
+		}
 		conns = append(conns, c)
 	}
 	out["agent"], out["role"], out["connectors"] = agent, roleName, conns
+	out["broker_tokens"] = tokens(d.b.BrokerContextBytes())
 	writeJSON(w, out)
 }
+
+// tokens estimates a token count from JSON bytes: about four bytes a token. Models
+// tokenize differently, so the dashboard always shows it as an estimate.
+func tokens(bytes int) int { return (bytes + 3) / 4 }
 
 // toolUse tallies an agent's tool calls from the end of the audit log, by connector/tool.
 func (d *Dashboard) toolUse(agent string) map[string]toolUse {
