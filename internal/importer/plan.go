@@ -5,6 +5,7 @@ import (
 	"maps"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -68,6 +69,20 @@ type launch struct {
 	Known   bool              // false: the connector's env file couldn't be read
 }
 
+// normCommand is normPath for a command: a bare name (uvx) is looked up on PATH, so it
+// matches a connector that names the same program by its full path.
+func normCommand(s string) string {
+	s = strings.TrimSpace(s)
+	if s != "" && !strings.ContainsAny(s, `/\`) {
+		if p, err := exec.LookPath(s); err == nil {
+			if abs, err := filepath.Abs(p); err == nil {
+				s = abs
+			}
+		}
+	}
+	return normPath(s)
+}
+
 func normPath(s string) string {
 	s = strings.TrimSpace(s)
 	if runtime.GOOS == "windows" {
@@ -103,7 +118,7 @@ func launchOfServer(s Server, getenv func(string) string) launch {
 	}
 	l := launch{Known: true, Env: map[string]string{}, Headers: map[string]string{}, Secret: map[string]bool{}}
 	if s.Type == "stdio" {
-		l.Command, l.Cwd = normPath(expand(s.Command, getenv)), expand(s.Cwd, getenv)
+		l.Command, l.Cwd = normCommand(expand(s.Command, getenv)), expand(s.Cwd, getenv)
 		if l.Cwd != "" {
 			l.Cwd = normPath(l.Cwd)
 		}
@@ -130,7 +145,7 @@ func launchOfConnector(cn config.Connector) launch {
 	l := launch{Env: map[string]string{}, Headers: map[string]string{}, Secret: map[string]bool{}}
 	r, err := cn.Resolve(redact.New())
 	if err != nil {
-		l.Command, l.Args, l.Cwd, l.URL = normPath(cn.Command), cn.Args, cn.Cwd, normURL(cn.URL)
+		l.Command, l.Args, l.Cwd, l.URL = normCommand(cn.Command), cn.Args, cn.Cwd, normURL(cn.URL)
 		if cn.URL == "" {
 			l.URL = ""
 		}
@@ -140,7 +155,7 @@ func launchOfConnector(cn config.Connector) launch {
 	if cn.Remote() {
 		l.URL = normURL(r.URL)
 	} else {
-		l.Command, l.Args, l.Cwd = normPath(r.Command), r.Args, r.Cwd
+		l.Command, l.Args, l.Cwd = normCommand(r.Command), r.Args, r.Cwd
 		if l.Cwd != "" {
 			l.Cwd = normPath(l.Cwd)
 		}

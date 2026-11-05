@@ -4,6 +4,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -198,6 +199,28 @@ func TestSparserClientIsTheSameServer(t *testing.T) {
 	it := items["imap"]
 	if !it.Existing || len(it.Diffs) != 1 || !strings.Contains(it.Diffs[0], "also sets IMAP_HOST") {
 		t.Errorf("sparser client: %+v", it)
+	}
+}
+
+// A client naming the program bare (uvx) runs the same server as a connector naming it by
+// its full path.
+func TestBareCommandMatchesFullPath(t *testing.T) {
+	bin := t.TempDir()
+	exe := filepath.Join(bin, "tool")
+	if runtime.GOOS == "windows" {
+		exe += ".exe"
+	}
+	os.WriteFile(exe, []byte("x"), 0o755)
+	t.Setenv("PATH", bin)
+	path := filepath.Join(t.TempDir(), "broker.yaml")
+	os.WriteFile(path, []byte("connectors:\n  tool:\n    command: '"+exe+"'\n    args: [--profile, dev]\n"), 0o600)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := planText(t, cfg, ".mcp.json", `{"mcpServers": {"tool": {"command": "tool", "args": ["--profile", "prod"]}}}`)
+	if it := items["tool-prod"]; it.VariantOf != "tool" {
+		t.Errorf("bare command: %v", slices.Collect(maps.Keys(items)))
 	}
 }
 
