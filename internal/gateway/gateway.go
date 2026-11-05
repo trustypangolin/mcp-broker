@@ -508,7 +508,7 @@ func (g *Gateway) callTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.
 		dec = g.st().pol.Tool(id.Agent, a.Connector, a.Tool, annotations(t))
 	}
 	if t == nil || dec.Action == config.Deny {
-		ev.Decision, ev.Detail = string(config.Deny), "unknown or denied tool"
+		ev.Decision, ev.Detail, ev.Outcome = string(config.Deny), "unknown or denied tool", audit.OutcomeRefused
 		if t != nil {
 			ev.Class, ev.Detail = string(dec.Class), dec.Reason
 		}
@@ -518,10 +518,10 @@ func (g *Gateway) callTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.
 	ev.Class, ev.Decision = string(dec.Class), string(dec.Action)
 
 	if dec.Action == config.Approve {
-		res, ch, ok := g.approve(ctx, req, id, dec, a, ev.ArgsHash)
+		res, ch, outcome := g.approve(ctx, req, id, dec, a, ev.ArgsHash)
 		ev.Channel = string(ch)
-		if !ok {
-			ev.Detail = "not approved"
+		if outcome != "" {
+			ev.Detail, ev.Outcome = "not approved", outcome
 			ev.DurationMS = time.Since(start).Milliseconds()
 			g.write(ev)
 			return res, nil
@@ -532,12 +532,30 @@ func (g *Gateway) callTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.
 	res, err := g.forward(ctx, req, id, d, a)
 	ev.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
-		ev.Error = g.red.String(err.Error())
+		ev.Error, ev.Outcome = g.red.String(err.Error()), audit.OutcomeFailed
 		g.write(ev)
 		return textResult(true, "%s/%s failed: %s", a.Connector, a.Tool, ev.Error), nil
 	}
+	ev.Outcome = audit.OutcomeRan
+	if res.IsError {
+		// The call went through, but the tool reported a failure.
+		ev.Outcome, ev.Error = audit.OutcomeFailed, g.red.String(firstText(res, 300))
+	}
 	g.write(ev)
 	return g.truncate(g.redactResult(res)), nil
+}
+
+// firstText is the start of a result's first text content, for the audit log.
+func firstText(res *mcp.CallToolResult, n int) string {
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			if s := []rune(tc.Text); len(s) > n {
+				return string(s[:n]) + "…"
+			}
+			return tc.Text
+		}
+	}
+	return "the tool returned an error result"
 }
 
 // redactResult replaces known secret values in a result. Results are otherwise passed
@@ -618,9 +636,10 @@ func (g *Gateway) truncate(res *mcp.CallToolResult) *mcp.CallToolResult {
 	return &out
 }
 
-// approve gets a decision for an approve-class call. It returns ok=true once the call may
-// proceed; otherwise res says why not (denied, expired, or pending with an approval id).
-func (g *Gateway) approve(ctx context.Context, req *mcp.CallToolRequest, id identity.Identity, dec policy.Decision, a callArgs, argsHash string) (res *mcp.CallToolResult, ch config.Channel, ok bool) {
+// approve gets a decision for an approve-class call. An empty outcome means the call may
+// proceed; otherwise outcome is the audit outcome and res says why not (denied, expired, or
+// pending with an approval id).
+func (g *Gateway) approve(ctx context.Context, req *mcp.CallToolRequest, id identity.Identity, dec policy.Decision, a callArgs, argsHash string) (res *mcp.CallToolResult, ch config.Channel, outcome string) {
 	return g.approveFor(ctx, req, id, approvalSpec{
 		plan: approval.Plan{
 			Kind: "tool.call", Agent: id.Agent, Connector: a.Connector, Tool: a.Tool, Class: string(dec.Class), ArgsHash: argsHash,
@@ -641,9 +660,23 @@ type approvalSpec struct {
 	retry      string        // how to come back once approved
 }
 
-// approveFor gets a decision for spec through the agent's channels. ok means approved and
-// the approval has been spent on this exact action; otherwise res is the answer to return.
-func (g *Gateway) approveFor(ctx context.Context, req *mcp.CallToolRequest, id identity.Identity, spec approvalSpec) (res *mcp.CallToolResult, ch config.Channel, ok bool) {
+// outcomeOf is the audit outcome of an approval that didn't let the action through.
+func outcomeOf(s approval.Status) string {
+	switch s {
+	case approval.Denied:
+		return audit.OutcomeDenied
+	case approval.Expired:
+		return audit.OutcomeTimedOut
+	case approval.Pending:
+		return audit.OutcomePending
+	}
+	return audit.OutcomeRefused
+}
+
+// approveFor gets a decision for spec through the agent's channels. An empty outcome means
+// approved, and the approval has been spent on this exact action; otherwise outcome is the
+// audit outcome and res is the answer to return.
+func (g *Gateway) approveFor(ctx context.Context, req *mcp.CallToolRequest, id identity.Identity, spec approvalSpec) (res *mcp.CallToolResult, ch config.Channel, outcome string) {
 	q := g.opts.Approvals
 	p := spec.plan
 	binding := approval.Binding{Agent: p.Agent, Connector: p.Connector, Tool: p.Tool, Profile: p.Profile, Action: p.Action, ArgsHash: p.ArgsHash}
@@ -653,11 +686,13 @@ func (g *Gateway) approveFor(ctx context.Context, req *mcp.CallToolRequest, id i
 		e, _ := q.Get(spec.approvalID)
 		switch {
 		case err == nil:
-			return nil, e.Channel, true
+			return nil, e.Channel, ""
 		case errors.Is(err, approval.ErrNotApproved) && e.Status == approval.Pending:
-			return g.pending(e, spec.retry), "", false
+			return g.pending(e, spec.retry), "", audit.OutcomePending
+		case e.Status == approval.Denied || e.Status == approval.Expired:
+			return textResult(true, "approval %s cannot be used: %v", spec.approvalID, err), e.Channel, outcomeOf(e.Status)
 		default:
-			return textResult(true, "approval %s cannot be used: %v", spec.approvalID, err), "", false
+			return textResult(true, "approval %s cannot be used: %v", spec.approvalID, err), "", audit.OutcomeRefused
 		}
 	}
 
@@ -670,7 +705,7 @@ func (g *Gateway) approveFor(ctx context.Context, req *mcp.CallToolRequest, id i
 	e := q.Submit(p)
 	g.write(audit.Event{Kind: audit.KindPlanCreated, Agent: id.Agent, Connector: p.Connector, Tool: p.Tool, Profile: p.Profile, Action: p.Action, PlanID: e.ID, ArgsHash: p.ArgsHash, Detail: p.Reason})
 	if e.Status == approval.Denied {
-		return textResult(true, "denied: %s has no approval channel", id.Agent), "", false
+		return textResult(true, "denied: %s has no approval channel", id.Agent), "", audit.OutcomeRefused
 	}
 
 	wait := g.opts.ApprovalWait
@@ -691,13 +726,17 @@ func (g *Gateway) approveFor(ctx context.Context, req *mcp.CallToolRequest, id i
 	switch got.Status {
 	case approval.Approved:
 		if err := q.Consume(e.ID, binding); err != nil {
-			return textResult(true, "approval %s: %v", e.ID, err), got.Channel, false
+			return textResult(true, "approval %s: %v", e.ID, err), got.Channel, audit.OutcomeRefused
 		}
-		return nil, got.Channel, true
+		return nil, got.Channel, ""
 	case approval.Pending:
-		return g.pending(got, spec.retry), "", false
+		if ctx.Err() != nil {
+			// The agent gave up (its request was cancelled), not the wait running out.
+			return g.pending(got, spec.retry), "", audit.OutcomeCancelled
+		}
+		return g.pending(got, spec.retry), "", audit.OutcomePending
 	default:
-		return textResult(true, "%s was not approved (%s)", spec.label, got.Status), got.Channel, false
+		return textResult(true, "%s was not approved (%s)", spec.label, got.Status), got.Channel, outcomeOf(got.Status)
 	}
 }
 

@@ -232,7 +232,31 @@ Requirements:
 
 ## Audit log
 
-JSONL, one line per event: tool call, plan created, approval decision, process start, health transition, stop, exit. Fields: ts, kind, connector or profile, tool or action, args hash (not raw args for policy `approve` tools that may carry content), decision, channel, duration, error. Never write env values or secrets.
+JSONL, one line per event: tool call, plan created, approval decision, process start, health transition, stop, exit. Fields: ts, kind, connector or profile, tool or action, args hash (not raw args for policy `approve` tools that may carry content), decision, channel, duration, error, outcome. Never write env values or secrets.
+
+A `tool_call` record (a forwarded call, or a `profile` action) is written once the call is
+settled. Two of its fields are easy to confuse:
+
+| Field | Meaning | Values |
+|---|---|---|
+| `decision` | What policy said, before anything ran | `allow`, `approve`, `deny`; `blocked` for a profile plan that can't run |
+| `outcome` | What happened to the call | see below |
+| `channel` | Where an approval was answered | `elicitation`, `tray`, `dashboard` |
+| `detail` | Free text: the policy reason, or `approved` / `not approved` | |
+| `error` | Why a `failed` call failed, redacted | |
+
+| `outcome` | When |
+|---|---|
+| `ran` | Forwarded and returned without error (a profile action that ran) |
+| `failed` | Forwarded, and the connector, the tool (an error result) or the transport failed |
+| `denied` | Needed approval and the user denied it |
+| `timed_out` | Needed approval and the approval expired unanswered |
+| `pending` | Still waiting for approval: the agent got an approval id to retry with, and the retry is its own record |
+| `cancelled` | The agent's request was cancelled while it waited for approval |
+| `refused` | Policy `deny`, an unknown tool, a hidden profile, a blocked plan, or an approval id that can't be used |
+
+So `"outcome":"denied"` finds exactly the calls a user denied. Records written before
+`outcome` existed have only `detail`.
 
 ## CLI
 

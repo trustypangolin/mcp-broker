@@ -452,6 +452,84 @@ func TestAuditRecordsDecisionsNotArgs(t *testing.T) {
 	}
 }
 
+// toolCalls reads the tool_call records from the audit log.
+func (h *harness) toolCalls() []audit.Event {
+	data, _ := os.ReadFile(h.audit)
+	var out []audit.Event
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var e audit.Event
+		if json.Unmarshal([]byte(line), &e) == nil && e.Kind == audit.KindToolCall {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// Every tool_call record says what happened to the call, not just what policy said.
+func TestAuditOutcomes(t *testing.T) {
+	h := newHarness(t, fakemcp.ModeCurrent, nil)
+	h.gw.opts.ApprovalWait = 10 * time.Second
+	decide := func(approve bool) {
+		events, cancel := h.q.Subscribe()
+		go func() {
+			defer cancel()
+			for e := range events {
+				if e.Status == approval.Pending {
+					h.q.Decide(e.ID, approve, config.ChanDashboard)
+					return
+				}
+			}
+		}()
+	}
+	h.as("coder")
+	h.callFake("get_echo", map[string]any{"text": "a"})     // ran
+	h.callFake("get_failure", map[string]any{"text": "b"})  // failed
+	h.callFake("send_message", map[string]any{"text": "c"}) // refused: external is denied for coder
+	decide(true)
+	h.callFake("delete_thing", map[string]any{"text": "d"}) // approved, ran
+	decide(false)
+	h.callFake("delete_thing", map[string]any{"text": "e"}) // denied
+	h.gw.opts.ApprovalWait = 50 * time.Millisecond
+	h.callFake("delete_thing", map[string]any{"text": "f"}) // pending: handed an approval id
+
+	// The agent cancels while waiting.
+	h.gw.opts.ApprovalWait = 10 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	h.session.CallTool(ctx, &mcp.CallToolParams{Name: "call_tool", Arguments: map[string]any{"connector": "fake", "tool": "delete_thing", "arguments": map[string]any{"text": "g"}}})
+	cancel()
+
+	deadline := time.Now().Add(5 * time.Second)
+	var calls []audit.Event
+	for time.Now().Before(deadline) { // the cancelled call's record lands once the server notices
+		if calls = h.toolCalls(); len(calls) >= 7 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	var got []string
+	for _, e := range calls {
+		got = append(got, e.Decision+":"+e.Outcome)
+	}
+	want := []string{"allow:ran", "allow:failed", "deny:refused", "approve:ran", "approve:denied", "approve:pending", "approve:cancelled"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("outcomes\n got %v\nwant %v", got, want)
+	}
+	if len(calls) > 1 && !strings.Contains(calls[1].Error, "could not do b") {
+		t.Errorf("failed call's error: %q", calls[1].Error)
+	}
+}
+
+func TestOutcomeOfApproval(t *testing.T) {
+	for s, want := range map[approval.Status]string{
+		approval.Denied: audit.OutcomeDenied, approval.Expired: audit.OutcomeTimedOut,
+		approval.Pending: audit.OutcomePending, "other": audit.OutcomeRefused,
+	} {
+		if got := outcomeOf(s); got != want {
+			t.Errorf("%s: %s, want %s", s, got, want)
+		}
+	}
+}
+
 func TestConcurrentAgentsShareOneProcess(t *testing.T) {
 	h := newHarness(t, fakemcp.ModeCurrent, nil)
 	var wg sync.WaitGroup

@@ -98,6 +98,16 @@ func TestProfileStartNeedsApprovalThenStops(t *testing.T) {
 	if isErr || !strings.Contains(out, `"stopped"`) {
 		t.Fatalf("stop = %s", out)
 	}
+
+	// Each profile action is logged once, after it ran, with what happened.
+	var got []string
+	for _, e := range h.toolCalls() {
+		got = append(got, e.Action+":"+e.Outcome)
+	}
+	want := "status:refused plan:ran start:denied start:ran status:ran start:refused stop:ran" // the second start's plan is blocked: already running
+	if strings.Join(got, " ") != want {
+		t.Errorf("profile outcomes\n got %s\nwant %s", strings.Join(got, " "), want)
+	}
 }
 
 func TestNetworkExposedStartAlwaysNeedsApproval(t *testing.T) {

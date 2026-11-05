@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/trustypangolin/mcp-broker/internal/approval"
+	"github.com/trustypangolin/mcp-broker/internal/audit"
 	"github.com/trustypangolin/mcp-broker/internal/clientcfg"
 	"github.com/trustypangolin/mcp-broker/internal/config"
 	"github.com/trustypangolin/mcp-broker/internal/policy"
@@ -125,14 +126,17 @@ func (d *Dashboard) toolUse(agent string) map[string]toolUse {
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	for sc.Scan() {
 		var e struct {
-			TS                                             time.Time
-			Kind, Agent, Connector, Tool, Decision, Detail string
+			TS                                                      time.Time
+			Kind, Agent, Connector, Tool, Decision, Detail, Outcome string
 		}
 		if json.Unmarshal(sc.Bytes(), &e) != nil || e.Kind != "tool_call" || e.Agent != agent || e.Tool == "" {
 			continue
 		}
-		if e.Decision == string(config.Deny) {
+		if e.Decision == string(config.Deny) || e.Outcome == audit.OutcomeRefused {
 			continue // never ran, and not something the user can pre-approve away
+		}
+		if e.Outcome == audit.OutcomePending || e.Outcome == audit.OutcomeCancelled {
+			continue // the retry with the approval id is the call that counts
 		}
 		conn, _, _ := strings.Cut(e.Connector, "@") // per_agent instances
 		k := conn + "/" + e.Tool
@@ -140,7 +144,8 @@ func (d *Dashboard) toolUse(agent string) map[string]toolUse {
 		u.Calls++
 		if e.Decision == string(config.Approve) {
 			u.Asked++
-			if e.Detail == "approved" {
+			// Records from before outcome was logged say so only in detail.
+			if e.Outcome == audit.OutcomeRan || e.Outcome == audit.OutcomeFailed || (e.Outcome == "" && e.Detail == "approved") {
 				u.Approved++
 			}
 		}

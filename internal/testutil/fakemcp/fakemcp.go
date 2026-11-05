@@ -66,6 +66,12 @@ func register(s *mcp.Server) {
 		func(_ context.Context, _ *mcp.CallToolRequest, in textIn) (*mcp.CallToolResult, any, error) {
 			return text("deleted " + in.Text), nil, nil
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "get_failure", Description: "Report a tool error"},
+		func(_ context.Context, _ *mcp.CallToolRequest, in textIn) (*mcp.CallToolResult, any, error) {
+			res := text("could not do " + in.Text)
+			res.IsError = true
+			return res, nil, nil
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "send_message", Description: "Pretend to send"},
 		func(_ context.Context, _ *mcp.CallToolRequest, in textIn) (*mcp.CallToolResult, any, error) {
 			return text("sent " + in.Text), nil, nil

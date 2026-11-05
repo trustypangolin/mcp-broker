@@ -1069,23 +1069,27 @@ pages.config = async (main) => {
 pages.audit = async (main) => {
   const agent = h("input", { placeholder: "agent" });
   const kind = h("select", {}, ["", "tool_call", "approval", "connection", "process_start", "stop", "config_changed"].map((k) => h("option", { value: k }, k || "any kind")));
+  const outcome = h("select", {}, ["", "ran", "failed", "denied", "timed_out", "cancelled", "pending", "refused"].map((k) => h("option", { value: k }, k || "any outcome")));
   const q = h("input", { placeholder: "text" });
   const body = h("div", { class: "card table-wrap" });
+  const outcomePill = { ran: "allow", failed: "deny", denied: "deny", refused: "deny", timed_out: "approve", cancelled: "approve", pending: "approve" };
   const load = async () => {
-    const p = new URLSearchParams({ n: 300, agent: agent.value.trim(), kind: kind.value, q: q.value.trim() });
+    const p = new URLSearchParams({ n: 300, agent: agent.value.trim(), kind: kind.value, outcome: outcome.value, q: q.value.trim() });
     const data = await api("GET", "audit?" + p);
     fill(body, data.events.length ? h("table", {},
-      h("tr", {}, h("th", {}, "Time"), h("th", {}, "Kind"), h("th", {}, "Agent"), h("th", {}, "What"), h("th", {}, "Decision"), h("th", {}, "Detail")),
+      h("tr", {}, h("th", {}, "Time"), h("th", {}, "Kind"), h("th", {}, "Agent"), h("th", {}, "What"), h("th", {}, "Policy"), h("th", {}, "Outcome"), h("th", {}, "Detail")),
       data.events.map((e) => h("tr", {},
         h("td", {}, new Date(e.ts).toLocaleString()), h("td", {}, e.kind), h("td", {}, e.agent || e.source || ""),
         h("td", {}, [e.connector, e.tool].filter(Boolean).join("/") + (e.class ? " (" + e.class + ")" : "")),
         h("td", {}, e.decision && h("span", { class: "pill " + ({ allow: "allow", approve: "approve", deny: "deny", refused: "deny" }[e.decision] || "") }, e.decision), e.channel && " via " + e.channel),
+        h("td", {}, e.outcome && h("span", { class: "pill " + (outcomePill[e.outcome] || "") }, e.outcome.replace("_", " "))),
         h("td", {}, e.error ? h("span", { class: "bad" }, e.error) : e.detail || "")))) : h("div", { class: "empty" }, "No matching events."));
   };
   for (const el of [agent, q]) el.addEventListener("keydown", (ev) => ev.key === "Enter" && load());
   kind.addEventListener("change", load);
+  outcome.addEventListener("change", load);
   fill(main,
-    h("div", { class: "row" }, h("h2", { class: "grow" }, "Audit log"), agent, kind, q, h("button", { onclick: load }, "Refresh")),
+    h("div", { class: "row" }, h("h2", { class: "grow" }, "Audit log"), agent, kind, outcome, q, h("button", { onclick: load }, "Refresh")),
     body);
   await load();
 };

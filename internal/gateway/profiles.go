@@ -83,11 +83,23 @@ func (g *Gateway) profileTool(ctx context.Context, req *mcp.CallToolRequest) (*m
 	id := g.opts.Identity(req)
 	ev := audit.Event{Kind: audit.KindToolCall, Agent: id.Agent, Source: id.Source.String(), Profile: a.Name, Action: a.Action}
 	if !g.profileVisible(id.Agent, a.Name) {
-		ev.Decision, ev.Detail = string(config.Deny), "profile not visible"
+		ev.Decision, ev.Detail, ev.Outcome = string(config.Deny), "profile not visible", audit.OutcomeRefused
 		g.write(ev)
 		return textResult(true, "unknown profile %q", a.Name), nil // hidden and missing look alike
 	}
 	sup := g.opts.Supervisor
+	// gate writes refusals itself; an action it lets through is written here once it has
+	// run, as ran or (with failErr) failed.
+	var failErr error
+	defer func() {
+		if ev.Outcome != audit.OutcomeRan {
+			return
+		}
+		if failErr != nil {
+			ev.Outcome, ev.Error = audit.OutcomeFailed, g.red.String(failErr.Error())
+		}
+		g.write(ev)
+	}()
 
 	switch a.Action {
 	case "status":
@@ -120,6 +132,7 @@ func (g *Gateway) profileTool(ctx context.Context, req *mcp.CallToolRequest) (*m
 		}
 		pl, err := sup.Plan(a.Name, what)
 		if err != nil {
+			failErr = err
 			return textResult(true, "%v", err), nil
 		}
 		res := textResult(false, "%s", pl.Text())
@@ -132,7 +145,7 @@ func (g *Gateway) profileTool(ctx context.Context, req *mcp.CallToolRequest) (*m
 			return textResult(true, "%v", err), nil
 		}
 		if len(pl.Blocking) > 0 {
-			ev.Decision, ev.Detail = "blocked", strings.Join(pl.Blocking, "; ")
+			ev.Decision, ev.Detail, ev.Outcome = "blocked", strings.Join(pl.Blocking, "; "), audit.OutcomeRefused
 			g.write(ev)
 			msg := pl.Text()
 			if pl.ForeignPID != 0 {
@@ -150,6 +163,7 @@ func (g *Gateway) profileTool(ctx context.Context, req *mcp.CallToolRequest) (*m
 			st, err = sup.Update(a.Name)
 		}
 		if err != nil {
+			failErr = err
 			return textResult(true, "%s %s failed: %s", a.Action, a.Name, g.red.String(err.Error())), nil
 		}
 		res := jsonResult(st)
@@ -170,6 +184,7 @@ func (g *Gateway) profileTool(ctx context.Context, req *mcp.CallToolRequest) (*m
 				return res, nil
 			}
 			if err := sup.KillForeign(a.Name, pl.ForeignPID); err != nil {
+				failErr = err
 				return textResult(true, "%v", err), nil
 			}
 			return textResult(false, "killed pid %d (%s), which held a port of %s", pl.ForeignPID, pl.ForeignPath, a.Name), nil
@@ -190,6 +205,7 @@ func (g *Gateway) profileTool(ctx context.Context, req *mcp.CallToolRequest) (*m
 		}
 		st, err := sup.Stop(ctx, a.Name)
 		if err != nil && !errors.Is(err, supervisor.ErrNotRunning) {
+			failErr = err
 			return textResult(true, "stop %s: %s", a.Name, err), nil
 		}
 		return jsonResult(st), nil
@@ -204,14 +220,14 @@ func (g *Gateway) gate(ctx context.Context, req *mcp.CallToolRequest, id identit
 	ev.Decision, ev.Detail = string(dec.Action), dec.Reason
 	switch dec.Action {
 	case config.Allow:
-		g.write(*ev)
+		ev.Outcome = audit.OutcomeRan // written by profileTool once the action has run
 		return nil
 	case config.Approve:
 		summary := fmt.Sprintf("%s wants to %s", id.Agent, pl.Summary())
 		if action == "kill_foreign" {
 			summary = fmt.Sprintf("%s wants to kill pid %d (%s), which holds a port of %s and was not started by the broker", id.Agent, pl.ForeignPID, pl.ForeignPath, a.Name)
 		}
-		res, ch, ok := g.approveFor(ctx, req, id, approvalSpec{
+		res, ch, outcome := g.approveFor(ctx, req, id, approvalSpec{
 			plan: approval.Plan{
 				Kind: "profile." + action, Agent: id.Agent, Profile: a.Name, Action: action, ArgsHash: pl.Hash,
 				Summary: g.red.String(summary), Detail: pl.Text(), Reason: dec.Reason,
@@ -221,15 +237,15 @@ func (g *Gateway) gate(ctx context.Context, req *mcp.CallToolRequest, id identit
 			retry:      "call profile again with the same name and action",
 		})
 		ev.Channel = string(ch)
-		if !ok {
-			ev.Detail = "not approved"
+		if outcome != "" {
+			ev.Detail, ev.Outcome = "not approved", outcome
 			g.write(*ev)
 			return res
 		}
-		ev.Detail = "approved"
-		g.write(*ev)
+		ev.Detail, ev.Outcome = "approved", audit.OutcomeRan
 		return nil
 	}
+	ev.Outcome = audit.OutcomeRefused
 	g.write(*ev)
 	return textResult(true, "%s %s is not allowed for %s (%s)", action, a.Name, id.Agent, dec.Reason)
 }

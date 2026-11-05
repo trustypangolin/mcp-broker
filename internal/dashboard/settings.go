@@ -413,7 +413,7 @@ func (d *Dashboard) audit(w http.ResponseWriter, r *http.Request) {
 	n := 200
 	fmt.Sscan(q.Get("n"), &n)
 	n = min(max(n, 1), 2000)
-	agent, kind, text := q.Get("agent"), q.Get("kind"), strings.ToLower(q.Get("q"))
+	agent, kind, outcome, text := q.Get("agent"), q.Get("kind"), q.Get("outcome"), strings.ToLower(q.Get("q"))
 
 	f, err := os.Open(d.b.Config().Audit.Path)
 	if err != nil {
@@ -432,11 +432,11 @@ func (d *Dashboard) audit(w http.ResponseWriter, r *http.Request) {
 	}
 	events := []json.RawMessage{}
 	for i := len(lines) - 1; i >= 0 && len(events) < n; i-- {
-		var e struct{ Agent, Kind string }
+		var e struct{ Agent, Kind, Outcome string }
 		if json.Unmarshal(lines[i], &e) != nil {
 			continue // the partial first line after a seek
 		}
-		if (agent != "" && e.Agent != agent) || (kind != "" && e.Kind != kind) ||
+		if (agent != "" && e.Agent != agent) || (kind != "" && e.Kind != kind) || (outcome != "" && e.Outcome != outcome) ||
 			(text != "" && !strings.Contains(strings.ToLower(string(lines[i])), text)) {
 			continue
 		}

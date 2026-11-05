@@ -48,7 +48,21 @@ type Event struct {
 	DurationMS int64     `json:"duration_ms,omitempty"`
 	Detail     string    `json:"detail,omitempty"`
 	Error      string    `json:"error,omitempty"`
+	// Outcome is what happened to a tool_call (or profile action): one of the Outcome*
+	// values. Decision is the policy action (allow, approve, deny), not the result.
+	Outcome string `json:"outcome,omitempty"`
 }
+
+// Outcomes of a tool_call record.
+const (
+	OutcomeRan       = "ran"       // forwarded and returned without error
+	OutcomeFailed    = "failed"    // forwarded, and the connector, the tool or the transport failed (error says how)
+	OutcomeDenied    = "denied"    // needed approval and the user denied it
+	OutcomeTimedOut  = "timed_out" // needed approval and the approval expired unanswered
+	OutcomeCancelled = "cancelled" // the agent's request was cancelled while waiting for approval
+	OutcomePending   = "pending"   // still waiting for approval: the agent was handed an approval id to retry with
+	OutcomeRefused   = "refused"   // policy deny, unknown tool, hidden profile, a blocked plan, or an unusable approval
+)
 
 // Log appends events to a JSONL file. It is safe for concurrent use.
 type Log struct {
