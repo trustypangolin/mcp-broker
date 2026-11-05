@@ -16,14 +16,14 @@ type osProc struct {
 	job windows.Handle
 }
 
-func newKillOnCloseJob() (windows.Handle, error) {
+func newKillOnCloseJob(extra uint32) (windows.Handle, error) {
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
 		return 0, fmt.Errorf("CreateJobObject: %w", err)
 	}
 	info := windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION{
 		BasicLimitInformation: windows.JOBOBJECT_BASIC_LIMIT_INFORMATION{
-			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+			LimitFlags: windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | extra,
 		},
 	}
 	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
@@ -43,7 +43,9 @@ func JoinKillOnCloseJob() error {
 	if selfJob != 0 {
 		return nil
 	}
-	job, err := newKillOnCloseJob()
+	// BREAKAWAY_OK lets StartDetached leave this job. Nothing else asks to: connectors and
+	// profiles sit in jobs of their own that don't allow it, so they still can't escape.
+	job, err := newKillOnCloseJob(windows.JOB_OBJECT_LIMIT_BREAKAWAY_OK)
 	if err != nil {
 		return err
 	}
@@ -55,6 +57,18 @@ func JoinKillOnCloseJob() error {
 	return nil
 }
 
+// StartDetached starts a program outside the kill-on-close job, so it outlives this
+// process: the tray uses it to start its updated self. It fails when a job this process
+// was started in (by whatever launched it) doesn't allow breaking away.
+func StartDetached(path string, args ...string) error {
+	cmd := exec.Command(path, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_BREAKAWAY_FROM_JOB | windows.CREATE_NEW_PROCESS_GROUP}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
 func (p *Process) start(opts Options) error {
 	if p.Cmd.SysProcAttr == nil {
 		p.Cmd.SysProcAttr = &syscall.SysProcAttr{}
@@ -64,7 +78,7 @@ func (p *Process) start(opts Options) error {
 		p.Cmd.SysProcAttr.CreationFlags |= windows.CREATE_NO_WINDOW
 	}
 
-	job, err := newKillOnCloseJob()
+	job, err := newKillOnCloseJob(0)
 	if err != nil {
 		return err
 	}

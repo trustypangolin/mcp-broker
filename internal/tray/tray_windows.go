@@ -23,6 +23,7 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/proc"
 	"github.com/trustypangolin/mcp-broker/internal/server"
 	"github.com/trustypangolin/mcp-broker/internal/supervisor"
+	"github.com/trustypangolin/mcp-broker/internal/update"
 	"github.com/trustypangolin/mcp-broker/internal/version"
 	"github.com/trustypangolin/mcp-broker/scripts"
 )
@@ -51,6 +52,8 @@ const (
 	cmdAutostart
 	cmdQuit
 	cmdProfiles
+	cmdUpdate
+	cmdCheckUpdates
 	cmdApprovalBase = 1000
 	cmdProfileBase  = 2000
 )
@@ -71,15 +74,20 @@ type app struct {
 	startErr error
 	onClick  func() // what clicking the last notification does
 	busy     bool   // a firewall change is running
+	updating bool   // an update is being installed
+
+	exeDir string          // where the running programs are
+	upd    *update.Checker // nil for dev builds
 }
 
 var theApp *app // the window procedure's receiver
 
 // Run shows the tray icon and hosts the broker until the user quits. cfgPath is created
 // with a starter config if it does not exist.
-func Run(cfgPath string) error {
+func Run(cfgPath string, opts Options) error {
 	runtime.LockOSThread()
 
+	waitForExit(opts.WaitPID)
 	mutex, err := windows.CreateMutex(nil, false, u16(`Local\mcp-broker-tray`))
 	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
 		messageBox(title, "mcp-broker is already running. Look for its icon in the notification area (you may need to click the ^ arrow).", mbOK|mbIconInfo)
@@ -124,9 +132,15 @@ func Run(cfgPath string) error {
 		log.Warn("could not join kill-on-close job", "err", err)
 	}
 	defer proc.KillAll()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a.startUpdates(ctx)
 	a.start()
-	if firstRun {
+	switch {
+	case firstRun:
 		a.notify(niifInfo, "mcp-broker is running", "A starter config was created. Click here to add connectors and create agent tokens.", func() { a.openDashboard("connectors") })
+	case opts.UpdatedFrom != "":
+		a.notify(niifInfo|niifNoSound, "mcp-broker updated", "Now running "+version.Version+" (was "+opts.UpdatedFrom+").", nil)
 	}
 
 	var m msg
@@ -283,7 +297,7 @@ func (a *app) notify(kind uint32, head, body string, onClick func()) {
 // ---- broker lifecycle ----
 
 func (a *app) start() {
-	b, err := broker.Start(broker.Options{ConfigPath: a.cfgPath, Watch: true, OnReload: a.reloaded, OnProfile: a.profileChanged, OnSignIn: a.signIn})
+	b, err := broker.Start(broker.Options{ConfigPath: a.cfgPath, Watch: true, OnReload: a.reloaded, OnProfile: a.profileChanged, OnSignIn: a.signIn, Updater: trayUpdater{a}})
 	a.mu.Lock()
 	a.b, a.startErr = b, err
 	a.mu.Unlock()
@@ -463,7 +477,7 @@ func isLoopbackListen(listen string) bool {
 
 func (a *app) showMenu() {
 	a.mu.Lock()
-	b, startErr, busy := a.b, a.startErr, a.busy
+	b, startErr, busy, updating := a.b, a.startErr, a.busy, a.updating
 	a.mu.Unlock()
 
 	m := newMenu()
@@ -477,6 +491,15 @@ func (a *app) showMenu() {
 		m.add(0, menuText("Not running: "+startErr.Error()), mfGrayed)
 	} else {
 		m.add(0, "Not running", mfGrayed)
+	}
+	if a.upd != nil {
+		if r := a.upd.Available(); r != nil {
+			flags := uint32(0)
+			if updating {
+				flags = mfGrayed
+			}
+			m.add(cmdUpdate, menuText("&Update to "+r.Version+"…"), flags)
+		}
 	}
 	m.sep()
 	if len(pending) > 0 {
@@ -546,6 +569,7 @@ func (a *app) showMenu() {
 		auto = mfChecked
 	}
 	m.add(cmdAutostart, "Start with &Windows", auto)
+	m.add(cmdCheckUpdates, "Check for updat&es…", 0)
 	m.sep()
 	m.add(cmdQuit, "&Quit", 0)
 	pSetMenuDefaultItem.Call(uintptr(m), cmdDashboard, 0)
@@ -601,6 +625,10 @@ func (a *app) command(id int, b *broker.Broker, pending []approval.Entry, profil
 		if err := setAutostart(!autostartEnabled()); err != nil {
 			go messageBox(title, "Could not change autostart: "+err.Error(), mbOK|mbIconError)
 		}
+	case id == cmdUpdate:
+		go a.confirmUpdate()
+	case id == cmdCheckUpdates:
+		go a.checkNow()
 	case id == cmdQuit:
 		postMessage(a.hwnd, wmClose, 0, 0)
 	}

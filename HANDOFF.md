@@ -48,6 +48,7 @@ stdio shim (`mcp-broker connect --agent NAME`) to Streamable HTTP on `:8765/mcp`
 | `dashboard` | `/ui`: cookie sessions (one-time login code or pasted admin token), CSRF header `X-Mcpb`, embedded `web/` (plain DOM JS, never innerHTML for agent text) |
 | `broker` | assembles everything: `Start`, `Reload`, file watcher, `/oauth/callback`, `SignIn`/`SignOut`, `Close` |
 | `tray` | pure Win32 via x/sys (no CGO): icon drawn in code, menu, balloons, autostart (HKCU Run), elevated firewall script |
+| `update` | self-update: GitHub release list (pre-releases on), semver + git-describe compare (`dev` builds get no checker), download + `checksums.txt` check, rename-swap of the programs with rollback, `Cleanup` of `*.old-*`. `MCP_BROKER_UPDATE_API` points it at a fake API for tests. Tray: `update_windows.go` (checks 30 s after start then 6 h, menu, balloon, `server.Updater` for the dashboard button); restarts via `proc.StartDetached` (CREATE_BREAKAWAY_FROM_JOB; the tray's self-job has BREAKAWAY_OK) with `-wait-pid <old> -updated-from <ver>`. **Keep those tray flags working in every release**, or the update into it fails to start. CLI: `self-update` |
 | `importer` | read Claude Desktop (Store build: `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\`) / `~/.claude.json` / VS Code / any `--from` file, plan (whole-word tag guessing; Windows location vars inlined, other `${VAR}`s to env files), apply (secrets → `secrets/<name>.env`), switch clients |
 
 `cmd/mcp-broker` is the CLI. `cmd/mcp-broker-tray` is the GUI binary. Both call

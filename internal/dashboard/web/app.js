@@ -227,10 +227,47 @@ async function refreshStatus() {
     return;
   }
   $("#version").textContent = me.version;
+  const up = $("#update-btn");
+  up.hidden = !(me.admin && me.update);
+  if (me.update) up.textContent = "Update to " + me.update.version;
   const b = $("#pending-badge");
   b.hidden = !me.pending_approvals;
   b.textContent = me.pending_approvals;
   for (const a of document.querySelectorAll("nav a[data-admin]")) a.hidden = !me.admin;
+}
+
+// updateDialog offers the newer release the tray found. Installing restarts the tray, so
+// the page waits for a broker reporting the new version, then reloads.
+function updateDialog() {
+  const u = me.update;
+  if (!u) return;
+  const running = (me.profiles || []).filter((p) => ["starting", "ready", "unhealthy"].includes(p.state)).map((p) => p.profile);
+  dialog("Update mcp-broker?", h("div", {},
+    h("p", {}, "From ", h("b", {}, me.version), " to ", h("b", {}, u.version), ". ",
+      h("a", { href: u.url, target: "_blank", rel: "noopener" }, "Release notes")),
+    h("p", { class: "muted" }, "The tray downloads the release, checks it against its checksums, replaces mcp-broker.exe and mcp-broker-tray.exe, and restarts. ",
+      "Agents reconnect by themselves; calls in flight and pending approvals are lost."),
+    running.length > 0 && h("p", { class: "warn" }, "Running profiles stop: " + running.join(", ") + ".")),
+  (close) => [
+    h("button", { onclick: close }, "Cancel"),
+    h("button", { class: "primary", onclick: (ev) => run(ev.target, async () => {
+      await api("POST", "update");
+      close();
+      toast("Updating to " + u.version + "… the page reloads when the broker is back.");
+      waitForVersion(u.version);
+    }) }, "Update and restart")]);
+}
+
+async function waitForVersion(v) {
+  for (let i = 0; i < 90; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    try {
+      const r = await fetch("/ui/api/status", { headers: { "X-Mcpb": "1" } });
+      if (r.status === 401) { location.href = "/ui/login"; return; }
+      if (r.ok && (await r.json()).version === v) { location.reload(); return; }
+    } catch { /* restarting */ }
+  }
+  toast("The broker hasn't come back as " + v + ". Check the tray.", true);
 }
 
 function route() {
@@ -1152,5 +1189,6 @@ function listen() {
 }
 
 window.addEventListener("hashchange", route);
+$("#update-btn").addEventListener("click", updateDialog);
 refreshStatus().then(() => { route(); listen(); });
 setInterval(refreshStatus, 15000);

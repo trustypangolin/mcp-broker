@@ -251,6 +251,26 @@ Profiles page (with live logs), or `mcp-broker ps | start | stop | update | logs
 Without the tray: `mcp-broker init`, `mcp-broker token create <agent> --save`,
 `mcp-broker serve`, and `mcp-broker dashboard` to open the settings.
 
+## Updates
+
+The tray checks GitHub for a newer release (pre-releases included) 30 seconds after it
+starts and every 6 hours after that. It never installs one by itself: a new release shows
+a notification, an **Update to vX…** item at the top of the tray menu, and an **Update to
+vX** button next to the version in the dashboard. **Check for updates…** in the menu checks
+now.
+
+Updating downloads the release zip for this PC and checks it against the release's
+`checksums.txt`. It then renames the running `mcp-broker.exe` and `mcp-broker-tray.exe` to
+`*.old-<version>.exe`, puts the new ones in their place and restarts the tray. Running
+profiles stop, and agents reconnect on their own. Leftover `*.old-*` files are removed at
+the next start once nothing runs them. A client's shim keeps running its old copy until the
+client restarts it. The checksum catches a corrupt download; it is not a signature.
+
+Builds labelled `dev` (plain `go build`) can't compare versions, so they never offer
+updates. Without the tray, `mcp-broker self-update` installs the newest release over the
+programs it runs from (`-check` only reports; `-stable` skips pre-releases). Then restart
+`mcp-broker serve`.
+
 ## Commands
 
 | Command | |
@@ -267,6 +287,7 @@ Without the tray: `mcp-broker init`, `mcp-broker token create <agent> --save`,
 | `mcp-broker client-config <harness\|all\|list> [--agent NAME] [--http] [--wsl]` | print the snippet a client needs |
 | `mcp-broker signin NAME` / `signout NAME` | sign in to an OAuth connector, or forget its token |
 | `mcp-broker init` / `validate` | create a starter config / check one |
+| `mcp-broker self-update [-check] [-stable]` | install the newest release over these programs |
 
 `client-config` prints a snippet to paste into a client's config. The clients are
 `claude-code`, `claude-desktop`, `vscode`, `codex`, `cursor`, `gemini` and `windsurf`. It

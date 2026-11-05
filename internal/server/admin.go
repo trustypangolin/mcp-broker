@@ -77,6 +77,24 @@ type Status struct {
 	Connectors []gateway.Connector `json:"connectors"`
 	Profiles   []supervisor.Status `json:"profiles"`
 	Agents     []string            `json:"agents"`
+	// Update is a newer release the host (the tray) offers to install; nil when there is
+	// none or the host can't install one.
+	Update *UpdateInfo `json:"update,omitempty"`
+}
+
+// UpdateInfo describes a newer release.
+type UpdateInfo struct {
+	Version string `json:"version"`
+	URL     string `json:"url"` // release notes
+}
+
+// Updater is a host that can install a newer release of the broker and restart into it.
+type Updater interface {
+	// Available returns the newer release found by the last check, if any.
+	Available() *UpdateInfo
+	// Apply installs it and restarts. It returns once the restart is under way, or with
+	// what went wrong; nothing changes on error.
+	Apply() error
 }
 
 // OAuthControl signs the broker in to and out of oauth connectors.

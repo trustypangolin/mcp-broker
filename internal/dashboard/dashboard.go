@@ -213,6 +213,7 @@ func (d *Dashboard) Mount(mux *http.ServeMux) {
 	mux.Handle("POST /ui/api/profiles/{name}/{action}", d.api(admin, d.profileAction))
 
 	mux.Handle("POST /ui/api/reload", d.api(admin, d.reload))
+	mux.Handle("POST /ui/api/update", d.api(admin, d.applyUpdate))
 	mux.Handle("GET /ui/api/connectors", d.api(admin, d.listConnectors))
 	mux.Handle("PUT /ui/api/connectors/{name}", d.api(admin, d.putConnector))
 	mux.Handle("DELETE /ui/api/connectors/{name}", d.api(admin, d.deleteConnector))
@@ -427,6 +428,21 @@ func (d *Dashboard) reload(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, res)
+}
+
+// applyUpdate installs the newer release the tray found; the tray then restarts, so the
+// page loses the broker for a few seconds.
+func (d *Dashboard) applyUpdate(w http.ResponseWriter, _ *http.Request) {
+	u, ok := d.b.(interface{ ApplyUpdate() error })
+	if !ok {
+		jsonError(w, http.StatusNotImplemented, "this broker can't update itself")
+		return
+	}
+	if err := u.ApplyUpdate(); err != nil {
+		jsonError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, map[string]bool{"ok": true})
 }
 
 func (d *Dashboard) unload(w http.ResponseWriter, r *http.Request) {

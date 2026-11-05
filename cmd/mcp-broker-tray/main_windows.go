@@ -18,10 +18,13 @@ import (
 func main() {
 	proc.RunHelper() // before anything else: it may be a CTRL_BREAK helper, not the tray
 	cfgFlag := flag.String("config", "", "config file (default $"+config.EnvConfigPath+" or the user config dir)")
+	var opts tray.Options
+	flag.IntVar(&opts.WaitPID, "wait-pid", 0, "wait for this process (the tray being updated) to exit first")
+	flag.StringVar(&opts.UpdatedFrom, "updated-from", "", "the version an update replaced, to report it")
 	flag.Parse()
 	path, err := config.ResolvePath(*cfgFlag)
 	if err == nil {
-		err = tray.Run(path)
+		err = tray.Run(path, opts)
 	}
 	if err != nil {
 		tray.Fatal(err)

@@ -32,6 +32,7 @@ commands:
   logs        show a profile's recent output
   plan        show what starting (or --for update) a profile would do
   signin      sign the broker in to an oauth connector (signout forgets the token)
+  self-update install the newest release over these programs (-check only reports)
   version     print version
 
 Run 'mcp-broker <command> -h' for command flags.
@@ -92,6 +93,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdPlan(rest, stdout, stderr)
 	case "signin", "signout":
 		return cmdSignIn(cmd, rest, stdout, stderr)
+	case "self-update":
+		return cmdSelfUpdate(rest, stdout, stderr)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return nil

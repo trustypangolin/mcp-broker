@@ -49,6 +49,8 @@ type Options struct {
 	OnProfile func(supervisor.Status)
 	// OnSignIn, if set, is told when an oauth connector waits for someone to sign in.
 	OnSignIn func(connector, url string)
+	// Updater, if set, offers newer releases on the dashboard and installs them.
+	Updater server.Updater
 }
 
 // Broker is a running broker.
@@ -330,7 +332,18 @@ func (b *Broker) Status() server.Status {
 		st.Agents = append(st.Agents, name)
 	}
 	slices.Sort(st.Agents)
+	if b.opts.Updater != nil {
+		st.Update = b.opts.Updater.Available()
+	}
 	return st
+}
+
+// ApplyUpdate installs the newer release the host offers and restarts into it.
+func (b *Broker) ApplyUpdate() error {
+	if b.opts.Updater == nil || b.opts.Updater.Available() == nil {
+		return errors.New("no update to install")
+	}
+	return b.opts.Updater.Apply()
 }
 
 // Tools lists a connector's tools, live or as last seen, for the dashboard.
