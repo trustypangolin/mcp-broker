@@ -27,7 +27,6 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/policy"
 	"github.com/trustypangolin/mcp-broker/internal/redact"
 	"github.com/trustypangolin/mcp-broker/internal/supervisor"
-	"github.com/trustypangolin/mcp-broker/internal/version"
 )
 
 // Options wires a Gateway to the rest of the broker.
@@ -70,8 +69,7 @@ type Gateway struct {
 	catMu   sync.Mutex
 	catalog map[string]ToolList // connector name → tools, loaded on first use
 
-	baseOnce  sync.Once
-	baseBytes int // BrokerContextBytes
+	srvs servers // per-agent MCP servers (ServerFor)
 
 	stop chan struct{}
 	done sync.WaitGroup
@@ -111,6 +109,7 @@ func (g *Gateway) st() *state { return g.cur.Load() }
 // definition; the others keep running. It returns the unloaded connector keys.
 func (g *Gateway) Reload(cfg *config.Config) []string {
 	g.cur.Store(&state{cfg: cfg, pol: policy.New(cfg)})
+	g.syncServers()
 	g.mu.Lock()
 	var stale []*downstream
 	for key, d := range g.conns {
@@ -287,60 +286,13 @@ func (g *Gateway) idleLoop() {
 	}
 }
 
-// Server builds the MCP server agents connect to.
-func (g *Gateway) Server() *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "mcp-broker", Version: version.Version}, &mcp.ServerOptions{
-		Instructions: "This is mcp-broker. Call list_connectors to see what is available, load_connector to get a " +
-			"connector's tools, then call_tool to use one. list_profiles and profile start, stop and inspect local apps " +
-			"such as ComfyUI. Some calls need the user's approval.",
-		Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}},
-		// Sessions are required (server-initiated elicitation for approvals and passthrough),
-		// and the SDK serves the 2026-07-28 protocol only statelessly, so pin the
-		// session-based versions explicitly rather than rely on the HTTP layer to refuse.
-		SupportedProtocolVersions: []string{"2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"},
-	})
-	s.AddTool(&mcp.Tool{
-		Name:        "list_connectors",
-		Description: "List available connectors (downstream MCP servers): name, description, whether loaded.",
-		InputSchema: schema(nil),
-		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
-	}, g.listConnectors)
-	s.AddTool(&mcp.Tool{
-		Name:        "load_connector",
-		Description: "Start a connector if needed and return its tools with input schemas.",
-		InputSchema: schema(map[string]any{"name": str("Connector name from list_connectors")}, "name"),
-		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
-	}, g.loadConnector)
-	s.AddTool(&mcp.Tool{
-		Name:        "call_tool",
-		Description: "Call a tool on a connector. May wait for the user's approval. If the result says approval is pending, call again with the same arguments plus approval_id once approved.",
-		InputSchema: schema(map[string]any{
-			"connector":   str("Connector name"),
-			"tool":        str("Tool name from load_connector"),
-			"arguments":   map[string]any{"type": "object", "description": "Tool arguments"},
-			"approval_id": str("Approval id from an earlier pending_approval result"),
-		}, "connector", "tool"),
-	}, g.callTool)
-	s.AddTool(&mcp.Tool{
-		Name:        "unload_connector",
-		Description: "Stop a connector and drop its cached tools.",
-		InputSchema: schema(map[string]any{"name": str("Connector name")}, "name"),
-	}, g.unloadConnector)
-	s.AddTool(&mcp.Tool{
-		Name:        "approval_status",
-		Description: "Check a pending approval by id.",
-		InputSchema: schema(map[string]any{"approval_id": str("Approval id")}, "approval_id"),
-		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
-	}, g.approvalStatus)
-	g.addProfileTools(s)
-	return s
-}
-
 func schema(props map[string]any, required ...string) map[string]any {
 	if props == nil {
 		props = map[string]any{}
 	}
-	s := map[string]any{"type": "object", "properties": props, "additionalProperties": false}
+	// No additionalProperties: false. It costs every agent's context bytes on every schema,
+	// and the handlers ignore fields they don't know anyway.
+	s := map[string]any{"type": "object", "properties": props}
 	if len(required) > 0 {
 		s["required"] = required
 	}
@@ -418,9 +370,12 @@ func (g *Gateway) loadable(ctx context.Context, id identity.Identity, name strin
 }
 
 func (g *Gateway) loadConnector(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	var a struct{ Name string }
+	var a struct{ Name, Detail string }
 	if err := decodeArgs(req, &a); err != nil {
 		return textResult(true, "%v", err), nil
+	}
+	if a.Detail != "" && a.Detail != "summary" && a.Detail != "full" {
+		return textResult(true, "detail is summary or full, not %q", a.Detail), nil
 	}
 	id := g.opts.Identity(req)
 	d, bad := g.loadable(ctx, id, a.Name)
@@ -428,15 +383,102 @@ func (g *Gateway) loadConnector(ctx context.Context, req *mcp.CallToolRequest) (
 		return bad, nil
 	}
 	_, tools := d.snapshot()
-	out := []toolInfo{}
+	if a.Detail == "full" {
+		out := []toolInfo{}
+		for _, t := range tools {
+			dec := g.st().pol.Tool(id.Agent, a.Name, t.Name, annotations(t))
+			if dec.Action == config.Deny {
+				continue // denied tools are hidden, not advertised
+			}
+			out = append(out, toolInfo{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema, Class: string(dec.Class), Approval: dec.Action == config.Approve})
+		}
+		return jsonResult(map[string]any{"connector": a.Name, "tools": out}), nil
+	}
+	out := []toolSummary{}
 	for _, t := range tools {
 		dec := g.st().pol.Tool(id.Agent, a.Name, t.Name, annotations(t))
 		if dec.Action == config.Deny {
-			continue // denied tools are hidden, not advertised
+			continue
 		}
-		out = append(out, toolInfo{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema, Class: string(dec.Class), Approval: dec.Action == config.Approve})
+		out = append(out, toolSummary{Name: t.Name, Summary: summarize(t.Description), Class: string(dec.Class), Approval: dec.Action == config.Approve})
 	}
-	return jsonResult(map[string]any{"connector": a.Name, "tools": out}), nil
+	return summaryResult(a.Name, out), nil
+}
+
+// toolSummary is one line of load_connector's summary: enough to pick a tool, not to call it.
+type toolSummary struct {
+	Name     string `json:"name"`
+	Summary  string `json:"summary,omitempty"`
+	Class    string `json:"class"`
+	Approval bool   `json:"requires_approval,omitempty"`
+}
+
+// summaryMax caps a summary line's description.
+const summaryMax = 100
+
+// summarize is a description's first sentence (or line), at most summaryMax characters.
+func summarize(desc string) string {
+	s := strings.TrimSpace(desc)
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = s[:i]
+	}
+	for i := 0; i+1 < len(s); i++ {
+		if (s[i] == '.' || s[i] == '!' || s[i] == '?') && s[i+1] == ' ' {
+			s = s[:i+1]
+			break
+		}
+	}
+	if r := []rune(s); len(r) > summaryMax {
+		s = strings.TrimRight(string(r[:summaryMax-1]), " ,;:") + "…"
+	}
+	return s
+}
+
+// summaryNext tells the agent how to go on from a summary.
+const summaryNext = "Call describe_tool for a tool's input schema before calling it."
+
+// summaryResult renders a summary compactly, one tool per line: indentation would cost
+// the agent more than the content.
+func summaryResult(connector string, tools []toolSummary) *mcp.CallToolResult {
+	var b strings.Builder
+	name, _ := json.Marshal(connector)
+	fmt.Fprintf(&b, "{\"connector\":%s,\"detail\":\"summary\",\"tools\":[", name)
+	for i, t := range tools {
+		line, _ := json.Marshal(t)
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString("\n")
+		b.Write(line)
+	}
+	next, _ := json.Marshal(summaryNext)
+	fmt.Fprintf(&b, "\n],\"next\":%s}", next)
+	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: b.String()}},
+		StructuredContent: map[string]any{"connector": connector, "detail": "summary", "tools": tools, "next": summaryNext}}
+}
+
+// describeTool returns one tool's full description and input schema, under the same
+// rules as call_tool: hidden and denied tools are unknown.
+func (g *Gateway) describeTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var a struct{ Connector, Tool string }
+	if err := decodeArgs(req, &a); err != nil {
+		return textResult(true, "%v", err), nil
+	}
+	id := g.opts.Identity(req)
+	d, bad := g.loadable(ctx, id, a.Connector)
+	if bad != nil {
+		return bad, nil
+	}
+	t := d.tool(a.Tool)
+	if t == nil {
+		return textResult(true, "unknown tool %q on connector %q", a.Tool, a.Connector), nil
+	}
+	dec := g.st().pol.Tool(id.Agent, a.Connector, a.Tool, annotations(t))
+	if dec.Action == config.Deny {
+		return textResult(true, "unknown tool %q on connector %q", a.Tool, a.Connector), nil
+	}
+	return jsonResult(map[string]any{"connector": a.Connector, "tool": toolInfo{Name: t.Name, Description: t.Description,
+		InputSchema: t.InputSchema, Class: string(dec.Class), Approval: dec.Action == config.Approve}}), nil
 }
 
 func (g *Gateway) unloadConnector(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {

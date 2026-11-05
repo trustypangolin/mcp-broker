@@ -43,8 +43,12 @@ func Handler(o Options) http.Handler {
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.DiscardHandler)
 	}
-	srv := o.Gateway.Server()
-	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, &mcp.StreamableHTTPOptions{
+	// Each agent gets its own server, offering only the meta-tools its role lets it use. The
+	// handler asks for one when a session starts; identify has already named the agent.
+	mcpHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+		id, _ := r.Context().Value(identKey{}).(identity.Identity)
+		return o.Gateway.ServerFor(id.Agent)
+	}, &mcp.StreamableHTTPOptions{
 		SessionTimeout: time.Hour,
 		Logger:         o.Logger,
 		// The SDK's DNS-rebinding guard rejects loopback requests whose Host is not

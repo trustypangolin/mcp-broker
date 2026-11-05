@@ -44,8 +44,8 @@ type Backend interface {
 	Tools(connector string) gateway.ToolList
 	// Discover starts a connector (agent's instance, for per_agent ones) to list its tools.
 	Discover(ctx context.Context, connector, agent string) (gateway.ToolList, error)
-	// BrokerContextBytes is what every agent's context holds before loading a connector.
-	BrokerContextBytes() int
+	// BrokerContextBytes is what agent's context holds before it loads a connector.
+	BrokerContextBytes(agent string) int
 }
 
 const (

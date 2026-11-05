@@ -171,7 +171,7 @@ func TestInitialToolListIsMetaToolsOnly(t *testing.T) {
 	for _, tl := range res.Tools {
 		names = append(names, tl.Name)
 	}
-	if got := strings.Join(names, ","); got != "approval_status,call_tool,list_connectors,list_profiles,load_connector,profile,unload_connector" {
+	if got := strings.Join(names, ","); got != "approval_status,call_tool,describe_tool,list_connectors,list_profiles,load_connector,profile,unload_connector" {
 		t.Errorf("tools = %s", got)
 	}
 }
@@ -199,7 +199,7 @@ func TestVisibility(t *testing.T) {
 
 func TestLoadHidesDeniedTools(t *testing.T) {
 	h := newHarness(t, fakemcp.ModeCurrent, nil)
-	out, isErr := h.as("coder").call("load_connector", map[string]any{"name": "fake"})
+	out, isErr := h.as("coder").call("load_connector", map[string]any{"name": "fake", "detail": "full"})
 	if isErr {
 		t.Fatal(out)
 	}

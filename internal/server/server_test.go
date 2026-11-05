@@ -124,8 +124,18 @@ func TestTokenSelectsAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer b.Close()
-	if out := listConnectors(t, b); strings.Contains(out, "fake") {
-		t.Errorf("beta sees %s", out)
+	// beta can see no connector, so its own server doesn't even offer the connector tools.
+	res, err := b.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tl := range res.Tools {
+		if tl.Name == "list_connectors" || tl.Name == "call_tool" {
+			t.Errorf("beta is offered %s", tl.Name)
+		}
+	}
+	if _, err := b.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_connectors"}); err == nil {
+		t.Error("beta called list_connectors")
 	}
 }
 

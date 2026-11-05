@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -106,12 +107,23 @@ func call(t *testing.T, s *mcp.ClientSession, tool string, args map[string]any) 
 func TestReloadChangesWhatAnOpenSessionSees(t *testing.T) {
 	f := start(t, configText("none", "Fake", `"127.0.0.1/32"`), Options{})
 	s := f.session()
-	if out := call(t, s, "list_connectors", nil); strings.Contains(out, "fake") {
-		t.Fatalf("before reload: %s", out)
+	has := func(name string) bool {
+		res, err := s.ListTools(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return slices.ContainsFunc(res.Tools, func(tl *mcp.Tool) bool { return tl.Name == name })
+	}
+	// An agent that can see no connector isn't offered the connector tools at all.
+	if has("list_connectors") {
+		t.Fatal("before reload: list_connectors offered with no connectors visible")
 	}
 	f.write(configText("all", "Fake", `"127.0.0.1/32"`))
 	if _, err := f.b.Reload(); err != nil {
 		t.Fatal(err)
+	}
+	if !has("list_connectors") {
+		t.Fatal("after reload: the open session wasn't given list_connectors")
 	}
 	if out := call(t, s, "list_connectors", nil); !strings.Contains(out, `"fake"`) {
 		t.Fatalf("after reload: %s", out)

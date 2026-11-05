@@ -16,29 +16,6 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/supervisor"
 )
 
-func (g *Gateway) addProfileTools(s *mcp.Server) {
-	s.AddTool(&mcp.Tool{
-		Name:        "list_profiles",
-		Description: "List app profiles (long-running local apps such as ComfyUI) you may use, with their state.",
-		InputSchema: schema(nil),
-		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
-	}, g.listProfiles)
-	s.AddTool(&mcp.Tool{
-		Name: "profile",
-		Description: "Act on an app profile. action: status | logs | plan | start | stop | update. " +
-			"start returns at once with state starting; poll status until ready. plan shows what start, stop or update would do. " +
-			"start, stop and update may need the user's approval.",
-		InputSchema: schema(map[string]any{
-			"name":         str("Profile name from list_profiles"),
-			"action":       map[string]any{"type": "string", "enum": []string{"status", "logs", "plan", "start", "stop", "update"}},
-			"tail":         map[string]any{"type": "integer", "description": "logs: how many lines (default 100, max 1000)"},
-			"for":          map[string]any{"type": "string", "enum": []string{"start", "stop", "update"}, "description": "plan: which action (default start)"},
-			"kill_foreign": map[string]any{"type": "boolean", "description": "stop: kill the process holding the profile's port that the broker did not start (always needs approval)"},
-			"approval_id":  str("Approval id from an earlier pending_approval result"),
-		}, "name", "action"),
-	}, g.profileTool)
-}
-
 type profileInfo struct {
 	Name        string           `json:"name"`
 	Description string           `json:"description,omitempty"`

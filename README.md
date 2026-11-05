@@ -33,6 +33,28 @@ Status: early development.
    Remove the servers you moved behind the broker from the client's own config, or their
    tools appear twice.
 
+### What an agent sees
+
+An agent starts with only the broker's own tools, and only those its role lets it use:
+
+- the connector tools if it can see any connector;
+- `list_profiles` and `profile` if it can use any profile;
+- `approval_status` if its approvals can be answered outside its client.
+
+When a reload changes this, connected clients are told (`tools/list_changed`) and refresh.
+
+To use a connector, an agent calls:
+
+1. `list_connectors`;
+2. `load_connector`, which by default returns one line per tool: name, first sentence,
+   class, and whether it needs approval;
+3. `describe_tool` for the tool it wants, to get that tool's full description and input
+   schema;
+4. `call_tool`.
+
+A 120-tool server costs a few thousand tokens to list this way, instead of about 20K with
+every schema. `load_connector` with `detail: "full"` still returns everything at once.
+
 Approvals pop up as a notification from the tray (click it to approve or deny). Claude Code
 and Claude Desktop can also ask in the app. Pending approvals are on the dashboard's
 Approvals page, which also works from a phone once LAN access is on.
@@ -107,15 +129,15 @@ same allow rule for that tool.
 The tree also estimates **context cost** in tokens (JSON bytes divided by 4). Different
 models tokenize differently, so the figures are rough. It shows:
 
-- the **broker context**: the meta-tools and instructions every agent starts with;
-- for each connector, what one `load_connector` adds for the selected agent, and the total
-  for each group;
-- for each tool, its own size.
+- the **broker context**: the meta-tools and instructions the selected agent starts with;
+- for each connector, what one `load_connector` adds for that agent (its default summary,
+  with the `full` size next to it), and the total for each group;
+- for each tool, what `describe_tool` returns for it.
 
 Connectors and groups are marked **light** (under 2K), **medium** (2K–10K) or **heavy** (over
 10K), with the level written out as well as coloured. A denied tool is left out of that
-agent's `load_connector`, so it costs nothing. Setting **Deny** on tools an agent doesn't
-need shrinks its context too. A "+" means some tool sizes aren't known yet: **Refresh tools**
+agent's `load_connector` and `describe_tool`, so it costs nothing. Setting **Deny** on tools
+an agent doesn't need shrinks its context too. A "+" means some tool sizes aren't known yet: **Refresh tools**
 measures them.
 
 The tree reads each connector's tools from the running instance. When a connector isn't

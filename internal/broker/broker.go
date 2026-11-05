@@ -336,8 +336,8 @@ func (b *Broker) Status() server.Status {
 // Tools lists a connector's tools, live or as last seen, for the dashboard.
 func (b *Broker) Tools(connector string) gateway.ToolList { return b.gw.Tools(connector) }
 
-// BrokerContextBytes is the size of the broker's own tools and instructions.
-func (b *Broker) BrokerContextBytes() int { return b.gw.BrokerContextBytes() }
+// BrokerContextBytes is the size of the broker's own tools and instructions as agent gets them.
+func (b *Broker) BrokerContextBytes(agent string) int { return b.gw.BrokerContextBytes(agent) }
 
 // Discover starts a connector to list its tools, for the dashboard.
 func (b *Broker) Discover(ctx context.Context, connector, agent string) (gateway.ToolList, error) {

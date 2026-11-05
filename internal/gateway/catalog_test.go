@@ -16,27 +16,36 @@ import (
 // wrapper come to the result's text, give or take the per-agent class labels.
 func TestContextSizesMatchLoadConnector(t *testing.T) {
 	h := newHarness(t, fakemcp.ModeCurrent, nil)
-	out, isErr := h.call("load_connector", map[string]any{"name": "fake"})
+	full, isErr := h.call("load_connector", map[string]any{"name": "fake", "detail": "full"})
 	if isErr {
-		t.Fatal(out)
+		t.Fatal(full)
 	}
-	est := LoadWrapperBytes("fake")
-	for _, tm := range h.gw.Tools("fake").Tools {
-		est += tm.Bytes
+	summary, _ := h.call("load_connector", map[string]any{"name": "fake"})
+	tools := h.gw.Tools("fake").Tools
+	estFull, estSummary := LoadWrapperBytes("fake"), SummaryWrapperBytes("fake")
+	for _, tm := range tools {
+		estFull += tm.Bytes
+		estSummary += tm.SummaryBytes
 	}
-	// The estimate counts every tool as "destructive" with requires_approval: never under.
-	if est < len(out) || est > len(out)+len(h.gw.Tools("fake").Tools)*40 {
-		t.Errorf("estimate %d bytes, load_connector returned %d", est, len(out))
+	// The estimates count every tool as "destructive" with requires_approval: never under.
+	if estFull < len(full) || estFull > len(full)+len(tools)*40 {
+		t.Errorf("full: estimate %d bytes, load_connector returned %d", estFull, len(full))
+	}
+	if estSummary < len(summary) || estSummary > len(summary)+len(tools)*40 {
+		t.Errorf("summary: estimate %d bytes, load_connector returned %d", estSummary, len(summary))
+	}
+	if len(summary)*2 > len(full) {
+		t.Errorf("the summary (%d bytes) should be well under the full list (%d)", len(summary), len(full))
 	}
 
-	// The broker's own share: its tool list and instructions.
+	// The broker's own share, for the session's (all-tools) server.
 	res, err := h.session.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	b, _ := json.Marshal(res.Tools)
 	want := len(b) + len(h.session.InitializeResult().Instructions)
-	if got := h.gw.BrokerContextBytes(); got != want {
+	if got := h.gw.BrokerContextBytes(""); got != want {
 		t.Errorf("broker context %d bytes, want %d", got, want)
 	}
 }

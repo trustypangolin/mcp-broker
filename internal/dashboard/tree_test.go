@@ -66,8 +66,10 @@ func connectorOf(out map[string]any, conn string) map[string]any {
 func TestToolTreeContextCost(t *testing.T) {
 	f := newFixture(t, treeBase)
 	f.b.tools = map[string]gateway.ToolList{
-		"aws":  {Tools: []gateway.ToolMeta{{Name: "run_script", Bytes: 4000}, {Name: "list_regions", Bytes: 400}}},
-		"fake": {Tools: []gateway.ToolMeta{{Name: "old", Bytes: 0}}}, // cached by an older broker
+		"aws": {Tools: []gateway.ToolMeta{
+			{Name: "run_script", Bytes: 4000, SummaryBytes: 200},
+			{Name: "list_regions", Bytes: 400, SummaryBytes: 80}}},
+		"fake": {Tools: []gateway.ToolMeta{{Name: "old"}}}, // cached by an older broker
 	}
 	f.signIn()
 	_, out := f.do("GET", "/ui/api/tree?agent=code", nil, nil)
@@ -75,8 +77,10 @@ func TestToolTreeContextCost(t *testing.T) {
 		t.Errorf("broker_tokens = %v", out["broker_tokens"])
 	}
 	aws := connectorOf(out, "aws")
-	before := aws["tokens"].(float64)
-	if aws["sized"] != true || before < 1100 || before > 1200 || toolsOf(t, out, "aws")["run_script"]["tokens"] != float64(1000) {
+	summary, full := aws["tokens"].(float64), aws["full_tokens"].(float64)
+	// tokens is the default (summary) load; full_tokens a load with every schema.
+	if aws["sized"] != true || summary < 70 || summary > 120 || full < 1100 || full > 1200 ||
+		toolsOf(t, out, "aws")["run_script"]["tokens"] != float64(1000) {
 		t.Errorf("aws = %v", aws)
 	}
 	if connectorOf(out, "fake")["sized"] != false {
@@ -85,8 +89,9 @@ func TestToolTreeContextCost(t *testing.T) {
 
 	f.do("POST", "/ui/api/rules", map[string]any{"role": "owner", "connector": "aws", "tool": "run_script", "action": "deny"}, nil)
 	_, out = f.do("GET", "/ui/api/tree?agent=code", nil, nil)
-	if after := connectorOf(out, "aws")["tokens"].(float64); before-after != 1000 {
-		t.Errorf("denying run_script: %v → %v tokens, want 1000 fewer", before, after)
+	aws = connectorOf(out, "aws")
+	if s, fl := aws["tokens"].(float64), aws["full_tokens"].(float64); summary-s != 50 || full-fl != 1000 {
+		t.Errorf("denying run_script: summary %v → %v (want 50 fewer), full %v → %v (want 1000 fewer)", summary, s, full, fl)
 	}
 }
 
