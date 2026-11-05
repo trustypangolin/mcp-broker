@@ -261,8 +261,11 @@ func (b *Broker) oauthConnector(name string) (config.Connector, error) {
 	switch {
 	case !ok:
 		return cn, fmt.Errorf("no connector %q", name)
-	case cn.OAuth == nil:
-		return cn, fmt.Errorf("connector %s does not use oauth", name)
+	case !cn.Remote():
+		return cn, fmt.Errorf("connector %s is local; sign-in is for remote connectors", name)
+	}
+	if o, _ := cn.OAuthSettings(); o == nil {
+		return cn, fmt.Errorf("connector %s sends its own Authorization header, so it doesn't sign in", name)
 	}
 	return cn, nil
 }

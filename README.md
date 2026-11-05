@@ -102,7 +102,25 @@ run `aws sso login --profile <name>`.
 
 ## Remote servers that need a sign-in (OAuth)
 
-Hosted MCP servers such as Xero's want a person to sign in. Register an app with the
+Hosted MCP servers want a person to sign in. Most, such as Atlassian's, let the broker
+register itself (dynamic client registration), so the URL is all you add:
+
+```yaml
+connectors:
+  atlassian:
+    url: https://mcp.atlassian.com/v1/mcp
+```
+
+The first time an agent loads it, the broker registers a client with the server, and
+`load_connector` answers at once with the sign-in link (the tray offers it too). The
+connector's card on the dashboard has a **Sign in** button that does the same. After you
+approve access in the browser, the next `load_connector` lists the tools. The registration
+is kept in `oauth\atlassian.client.json` and reused, including after a sign-out. The broker
+registers again only when the redirect URL changes or the server no longer recognizes the
+client. To limit what the broker asks for, add `oauth: {scopes: [...]}`. A connector that
+sends its own `Authorization` header never signs in.
+
+Some servers, such as Xero's, don't offer registration. For those, register an app with the
 service (a PKCE or "native" app; add `http://localhost:8765/oauth/callback` as its redirect
 URI), then:
 

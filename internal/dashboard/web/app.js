@@ -392,10 +392,12 @@ pages.connectors = async (main) => {
     const def = c.def;
     const loaded = c.instances.filter((i) => i.loaded);
     const bad = (c.issues || []).some((i) => i.startsWith("error"));
+    const auth = (c.instances.find((i) => i.auth) || {}).auth || "";
     return fold("connectors:" + c.name, true, "card",
       h("h3", {}, c.name,
         h("span", { class: "pill" }, def.url ? "remote" : "local"),
         loaded.length ? h("span", { class: "pill on" }, "loaded") : h("span", { class: "pill" }, "idle"),
+        auth && h("span", { class: "pill " + (auth === "signed in" ? "on" : "approve") }, auth),
         (def.tags || []).map((t) => h("span", { class: "pill" }, "tag:" + t)),
         bad && h("span", { class: "pill deny" }, "error"),
         def.description && h("span", { class: "muted head-desc" }, def.description)), [
@@ -409,6 +411,13 @@ pages.connectors = async (main) => {
       c.instances.some((i) => i.stderr && i.stderr.length) && h("details", {}, h("summary", { class: "muted" }, "Recent stderr"),
         c.instances.map((i) => h("pre", {}, (i.stderr || []).join("\n")))),
       h("div", { class: "row", style: "margin-top:8px" },
+        auth && auth !== "signed in" && h("button", { class: "primary", onclick: (ev) => signIn(ev.target, c.name) }, "Sign in"),
+        auth === "signed in" && h("button", { onclick: (ev) => run(ev.target, async () => {
+          if (!confirm("Sign out of " + c.name + "? Agents can't use it until you sign in again.")) return;
+          await api("POST", "connectors/" + encodeURIComponent(c.name) + "/oauth/signout");
+          toast("Signed out of " + c.name + ".");
+          route();
+        }) }, "Sign out"),
         h("button", { onclick: () => editConnector(c.name, def, data.classes, items) }, "Edit"),
         h("button", { onclick: () => editConnector(null, def, data.classes, items, { from: c.name, awsProfile: c.aws_profile }) }, "Duplicate"),
         h("button", { onclick: () => groupDialog("connectors", items, nameOf, { move: c.name }) }, "Group…"),
@@ -555,6 +564,25 @@ async function awsProfiles() {
         h("tr", {}, h("th", {}, "Profile"), h("th", {}, "Region"), h("th", {}, "Connector"), h("th", {}, "Policy"), h("th", {}, "")), rows))
         : h("div", { class: "empty" }, "No AWS profiles found.")),
     (close) => [h("button", { class: "primary", onclick: close }, "Close")]);
+}
+
+// signIn opens the connector's sign-in page. The authorization server sends the browser
+// back to localhost on the broker's computer, so it has to be that computer's browser.
+async function signIn(btn, name) {
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+  if (!local && !confirm("The sign-in returns to localhost on the broker's computer, so finish it in a browser there. Get the link anyway?")) return;
+  const tab = window.open("", "_blank"); // before the await, so it isn't blocked as a popup
+  await run(btn, async () => {
+    try {
+      const res = await api("POST", "connectors/" + encodeURIComponent(name) + "/oauth/signin");
+      if (tab) tab.location = res.url;
+      else window.location = res.url;
+      toast("Sign in to " + name + " in the new tab; the broker uses the token as soon as you finish.");
+    } catch (e) {
+      if (tab) tab.close();
+      throw e;
+    }
+  });
 }
 
 async function removeConnector(btn, name) {

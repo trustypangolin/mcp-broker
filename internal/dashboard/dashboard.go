@@ -215,6 +215,7 @@ func (d *Dashboard) Mount(mux *http.ServeMux) {
 	mux.Handle("PUT /ui/api/connectors/{name}", d.api(admin, d.putConnector))
 	mux.Handle("DELETE /ui/api/connectors/{name}", d.api(admin, d.deleteConnector))
 	mux.Handle("POST /ui/api/connectors/{key}/unload", d.api(admin, d.unload))
+	mux.Handle("POST /ui/api/connectors/{name}/oauth/{action}", d.api(admin, d.oauthAction))
 	mux.Handle("POST /ui/api/groups", d.api(admin, d.setGroup))
 	mux.Handle("GET /ui/api/aws", d.api(admin, d.listAWS))
 	mux.Handle("POST /ui/api/aws/{profile}/attach", d.api(admin, d.attachAWS))
@@ -426,4 +427,33 @@ func (d *Dashboard) reload(w http.ResponseWriter, _ *http.Request) {
 
 func (d *Dashboard) unload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"unloaded": d.b.Unload(r.PathValue("key"))})
+}
+
+// signIn starts signing in to a remote connector (registering a client first when the
+// server offers dynamic registration) and returns the link to open; signout forgets the
+// token. Same as mcp-broker signin / signout.
+func (d *Dashboard) oauthAction(w http.ResponseWriter, r *http.Request) {
+	oc, ok := d.b.(server.OAuthControl)
+	if !ok {
+		jsonError(w, http.StatusNotImplemented, "this broker can't sign in to connectors")
+		return
+	}
+	name := r.PathValue("name")
+	switch r.PathValue("action") {
+	case "signin":
+		url, err := oc.SignIn(name)
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, map[string]string{"url": url})
+	case "signout":
+		if err := oc.SignOut(name); err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	default:
+		jsonError(w, http.StatusNotFound, "unknown action")
+	}
 }

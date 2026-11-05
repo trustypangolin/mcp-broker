@@ -75,6 +75,13 @@ func (b *backend) Discover(_ context.Context, name, _ string) (gateway.ToolList,
 	}
 	return l, nil
 }
+func (b *backend) SignIn(name string) (string, error) {
+	if cn, ok := b.Config().Connectors[name]; !ok || !cn.Remote() {
+		return "", fmt.Errorf("connector %s is local", name)
+	}
+	return "https://as.example/authorize?client_id=dyn", nil
+}
+func (b *backend) SignOut(string) error { return nil }
 func (b *backend) Tools(name string) gateway.ToolList {
 	b.mu.Lock()
 	defer b.mu.Unlock()

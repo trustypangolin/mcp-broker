@@ -74,8 +74,8 @@ func (c *Config) Validate() error {
 			}
 		}
 		if o := cn.OAuth; o != nil {
-			if o.ClientID == "" {
-				add("%s.oauth.client_id: required (register a client with the server's authorization server)", p)
+			if o.ClientSecret != "" && o.ClientID == "" {
+				add("%s.oauth.client_secret: needs client_id (without one the broker registers its own client)", p)
 			}
 			if o.ClientSecret != "" && !strings.Contains(o.ClientSecret, "${") {
 				add("%s.oauth.client_secret: secret values belong in env_file; reference ${NAME}", p)

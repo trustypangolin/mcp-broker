@@ -171,10 +171,11 @@ func resolve(envFile string, env map[string]string, command string, args []strin
 // Resolve loads the connector's env_file and expands its settings.
 func (c Connector) Resolve(red *redact.Redactor) (*Resolved, error) {
 	r, err := resolve(c.EnvFile, c.Env, c.Command, c.Args, c.Cwd, c.URL, c.Headers, red)
-	if err != nil || c.OAuth == nil {
+	settings, _ := c.OAuthSettings()
+	if err != nil || settings == nil {
 		return r, err
 	}
-	o := *c.OAuth
+	o := *settings
 	for _, f := range []struct {
 		name string
 		v    *string

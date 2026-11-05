@@ -109,7 +109,14 @@ func (s *signIn) markReady(url string, err error) {
 // token, refreshing it as needed; when the server still refuses, it starts a sign-in and
 // fails the connection with *SignInRequired.
 func (m *Manager) Handler(name, endpoint string, o *config.OAuth) (auth.OAuthHandler, error) {
-	cfg := m.handlerConfig(name, o)
+	client := m.client(name, o)
+	if client == nil {
+		// Not registered yet. The handler only reaches the fetcher below, which hands the
+		// work to SignIn: that registers and builds the real authorization URL, so this
+		// placeholder never leaves the broker.
+		client = &oauthex.ClientCredentials{ClientID: "unregistered"}
+	}
+	cfg := m.handlerConfig(name, o, client)
 	cfg.AuthorizationCodeFetcher = func(ctx context.Context, _ *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
 		url, err := m.SignIn(ctx, name, endpoint, o)
 		if err != nil {
@@ -121,18 +128,39 @@ func (m *Manager) Handler(name, endpoint string, o *config.OAuth) (auth.OAuthHan
 	return auth.NewAuthorizationCodeHandler(cfg)
 }
 
-func (m *Manager) handlerConfig(name string, o *config.OAuth) *auth.AuthorizationCodeHandlerConfig {
-	client := &oauthex.ClientCredentials{ClientID: o.ClientID}
-	if o.ClientSecret != "" {
-		client.ClientSecretAuth = &oauthex.ClientSecretAuth{ClientSecret: o.ClientSecret}
+func (m *Manager) redirect(o *config.OAuth) string {
+	if o.RedirectURL != "" {
+		return o.RedirectURL
 	}
-	redirect := o.RedirectURL
-	if redirect == "" {
-		redirect = m.o.Redirect
+	return m.o.Redirect
+}
+
+// client is the OAuth client the broker signs in as: the configured client_id, or the one
+// it registered with the server (dynamic registration). nil when it has yet to register,
+// or when the saved registration was for another redirect URL.
+func (m *Manager) client(name string, o *config.OAuth) *oauthex.ClientCredentials {
+	if o.ClientID != "" {
+		c := &oauthex.ClientCredentials{ClientID: o.ClientID}
+		if o.ClientSecret != "" {
+			c.ClientSecretAuth = &oauthex.ClientSecretAuth{ClientSecret: o.ClientSecret}
+		}
+		return c
 	}
+	reg, err := m.loadRegistration(name)
+	if err != nil || reg.ClientID == "" || reg.RedirectURL != m.redirect(o) {
+		return nil
+	}
+	c := &oauthex.ClientCredentials{ClientID: reg.ClientID, Issuer: reg.Issuer}
+	if reg.ClientSecret != "" {
+		c.ClientSecretAuth = &oauthex.ClientSecretAuth{ClientSecret: reg.ClientSecret}
+	}
+	return c
+}
+
+func (m *Manager) handlerConfig(name string, o *config.OAuth, client *oauthex.ClientCredentials) *auth.AuthorizationCodeHandlerConfig {
 	cfg := &auth.AuthorizationCodeHandlerConfig{
 		PreregisteredClient: client,
-		RedirectURL:         redirect,
+		RedirectURL:         m.redirect(o),
 		RequestRefreshToken: true,
 		// Servers that send iss without advertising it are common; it must still match.
 		AcceptUnadvertisedIss: true,
@@ -220,7 +248,34 @@ func (m *Manager) run(s *signIn, endpoint string, o *config.OAuth) {
 const probeBody = `{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"mcp-broker","version":"0"}}}`
 
 func (m *Manager) authorize(ctx context.Context, s *signIn, endpoint string, o *config.OAuth) error {
-	cfg := m.handlerConfig(s.connector, o)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(probeBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	resp, err := m.o.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("reaching %s: %w", endpoint, err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		resp.Body.Close()
+		return fmt.Errorf("%s did not ask for authorization (HTTP %d)", endpoint, resp.StatusCode)
+	}
+	client := m.client(s.connector, o)
+	dynamic := o.ClientID == ""
+	if client == nil {
+		reg, err := m.register(ctx, s.connector, endpoint, resp.Header, o)
+		if err != nil {
+			resp.Body.Close()
+			return err
+		}
+		client = &oauthex.ClientCredentials{ClientID: reg.ClientID, Issuer: reg.Issuer}
+		if reg.ClientSecret != "" {
+			client.ClientSecretAuth = &oauthex.ClientSecretAuth{ClientSecret: reg.ClientSecret}
+		}
+	}
+	cfg := m.handlerConfig(s.connector, o, client)
 	cfg.AuthorizationCodeFetcher = func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
 		u, err := url.Parse(args.URL)
 		if err != nil {
@@ -245,23 +300,149 @@ func (m *Manager) authorize(ctx context.Context, s *signIn, endpoint string, o *
 	}
 	h, err := auth.NewAuthorizationCodeHandler(cfg)
 	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(probeBody))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	resp, err := m.o.Client.Do(req)
-	if err != nil {
-		return fmt.Errorf("reaching %s: %w", endpoint, err)
-	}
-	if resp.StatusCode != http.StatusUnauthorized {
 		resp.Body.Close()
-		return fmt.Errorf("%s did not ask for authorization (HTTP %d)", endpoint, resp.StatusCode)
+		return err
 	}
-	return h.Authorize(ctx, req, resp) // closes resp.Body
+	err = h.Authorize(ctx, req, resp) // closes resp.Body
+	if err != nil && dynamic && strings.Contains(err.Error(), "invalid_client") {
+		// The server has forgotten the registration (or never kept it): drop it, so the
+		// next sign-in registers again.
+		m.forgetRegistration(s.connector)
+		return fmt.Errorf("%s no longer knows the broker's client registration; sign in again to register a new one (%w)", s.connector, err)
+	}
+	return err
+}
+
+// registration is a client the broker registered with an authorization server (RFC 7591),
+// kept in oauth/<connector>.client.json so it is reused rather than registered again on
+// every sign-in. Signing out keeps it; only the token goes.
+type registration struct {
+	ClientID             string    `json:"client_id"`
+	ClientSecret         string    `json:"client_secret,omitempty"`
+	Issuer               string    `json:"issuer"`
+	RegistrationEndpoint string    `json:"registration_endpoint"`
+	RedirectURL          string    `json:"redirect_url"` // registering again when it changes
+	Registered           time.Time `json:"registered"`
+}
+
+func (m *Manager) registrationPath(name string) string {
+	return filepath.Join(m.o.Dir, name+".client.json")
+}
+
+func (m *Manager) loadRegistration(name string) (registration, error) {
+	var reg registration
+	b, err := os.ReadFile(m.registrationPath(name))
+	if err != nil {
+		return reg, err
+	}
+	return reg, json.Unmarshal(b, &reg)
+}
+
+func (m *Manager) forgetRegistration(name string) {
+	if err := os.Remove(m.registrationPath(name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		m.o.Logger.Warn("removing oauth client registration", "connector", name, "err", err)
+	}
+}
+
+// Registered reports whether the broker registered its own client for the connector.
+func (m *Manager) Registered(name string) bool {
+	_, err := os.Stat(m.registrationPath(name))
+	return err == nil
+}
+
+// register finds the connector's authorization server and registers a public client with
+// it, for servers that offer dynamic client registration instead of a developer console.
+func (m *Manager) register(ctx context.Context, name, endpoint string, challenge http.Header, o *config.OAuth) (registration, error) {
+	issuer, err := m.authServer(ctx, endpoint, challenge)
+	if err != nil {
+		return registration{}, err
+	}
+	asm, err := auth.GetAuthServerMetadata(ctx, issuer, m.o.Client)
+	if err != nil {
+		return registration{}, fmt.Errorf("reading %s's authorization server metadata: %w", name, err)
+	}
+	regEndpoint := issuer + "/register" // the 2025-03-26 fallback the SDK uses too
+	if asm != nil {
+		issuer, regEndpoint = asm.Issuer, asm.RegistrationEndpoint
+	}
+	if regEndpoint == "" {
+		return registration{}, fmt.Errorf("%s's authorization server (%s) doesn't offer dynamic client registration: register a client with it and set oauth.client_id (README: Remote servers that need a sign-in)", name, issuer)
+	}
+	redirect := m.redirect(o)
+	meta := &oauthex.ClientRegistrationMetadata{
+		ClientName:              "mcp-broker",
+		RedirectURIs:            []string{redirect},
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+		ResponseTypes:           []string{"code"},
+		TokenEndpointAuthMethod: "none",
+		Scope:                   strings.Join(o.Scopes, " "),
+	}
+	resp, err := oauthex.RegisterClient(ctx, regEndpoint, meta, m.o.Client)
+	if err != nil {
+		return registration{}, fmt.Errorf("registering a client for %s at %s: %w", name, regEndpoint, err)
+	}
+	reg := registration{ClientID: resp.ClientID, ClientSecret: resp.ClientSecret, Issuer: issuer,
+		RegistrationEndpoint: regEndpoint, RedirectURL: redirect, Registered: time.Now().UTC()}
+	b, err := json.MarshalIndent(reg, "", "  ")
+	if err != nil {
+		return registration{}, err
+	}
+	if err := writeFile(m.o.Dir, m.registrationPath(name), b); err != nil {
+		return registration{}, err
+	}
+	m.o.Logger.Info("oauth client registered", "connector", name, "issuer", issuer, "client_id", reg.ClientID)
+	return reg, nil
+}
+
+// authServer finds the authorization server for an MCP endpoint the way the SDK does:
+// protected resource metadata from the 401 challenge, then at the endpoint's path, then at
+// the root; failing all of those, the endpoint's origin (servers such as Atlassian publish
+// only authorization server metadata).
+func (m *Manager) authServer(ctx context.Context, endpoint string, challenge http.Header) (string, error) {
+	ru, err := url.Parse(endpoint)
+	if err != nil {
+		return "", err
+	}
+	type try struct{ meta, resource string }
+	var tries []try
+	if cs, err := oauthex.ParseWWWAuthenticate(challenge.Values("WWW-Authenticate")); err == nil {
+		for _, c := range cs {
+			if c.Scheme == "bearer" && c.Params["resource_metadata"] != "" {
+				tries = append(tries, try{c.Params["resource_metadata"], endpoint})
+			}
+		}
+	}
+	mu := *ru
+	mu.RawQuery, mu.Fragment = "", ""
+	mu.Path = "/.well-known/oauth-protected-resource/" + strings.TrimLeft(ru.Path, "/")
+	tries = append(tries, try{mu.String(), endpoint})
+	mu.Path = "/.well-known/oauth-protected-resource"
+	origin := *ru
+	origin.Path, origin.RawQuery, origin.Fragment = "", "", ""
+	tries = append(tries, try{mu.String(), origin.String()})
+	for _, t := range tries {
+		prm, err := oauthex.GetProtectedResourceMetadata(ctx, t.meta, t.resource, m.o.Client)
+		if err != nil || prm == nil {
+			continue
+		}
+		if len(prm.AuthorizationServers) == 0 {
+			return "", fmt.Errorf("%s's protected resource metadata names no authorization server", endpoint)
+		}
+		return prm.AuthorizationServers[0], nil
+	}
+	return origin.String(), nil
+}
+
+// writeFile writes b to path atomically, private to the user.
+func writeFile(dir, path string, b []byte) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // Callback handles the browser's return from the authorization server.
@@ -356,28 +537,26 @@ func (m *Manager) load(name string) (record, error) {
 }
 
 func (m *Manager) save(name string, rec record) error {
-	if err := os.MkdirAll(m.o.Dir, 0o700); err != nil {
-		return err
-	}
 	b, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := m.path(name) + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, m.path(name))
+	return writeFile(m.o.Dir, m.path(name), b)
 }
 
 // stored is the saved token as a refreshing source, or nil when there is none for this
 // client.
 func (m *Manager) stored(name string, o *config.OAuth) oauth2.TokenSource {
+	client := m.client(name, o)
 	rec, err := m.load(name)
-	if err != nil || rec.Token == nil || rec.ClientID != o.ClientID {
+	if err != nil || rec.Token == nil || client == nil || rec.ClientID != client.ClientID {
 		return nil
 	}
-	c := &oauth2.Config{ClientID: o.ClientID, ClientSecret: o.ClientSecret,
+	secret := ""
+	if client.ClientSecretAuth != nil {
+		secret = client.ClientSecretAuth.ClientSecret
+	}
+	c := &oauth2.Config{ClientID: client.ClientID, ClientSecret: secret,
 		Endpoint: oauth2.Endpoint{TokenURL: rec.TokenURL, AuthStyle: rec.AuthStyle}}
 	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, m.o.Client)
 	return &savingSource{m: m, name: name, rec: rec, base: c.TokenSource(ctx, rec.Token)}

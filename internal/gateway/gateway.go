@@ -148,10 +148,15 @@ type Connector struct {
 }
 
 func (g *Gateway) authState(name string, cn config.Connector) string {
-	if cn.OAuth == nil || g.opts.OAuth == nil {
+	o, implicit := cn.OAuthSettings()
+	if o == nil || g.opts.OAuth == nil {
 		return ""
 	}
-	return g.opts.OAuth.State(name)
+	s := g.opts.OAuth.State(name)
+	if implicit && s == "not signed in" && !g.opts.OAuth.Registered(name) {
+		return "" // a URL-only connector that hasn't asked for a sign-in may need none
+	}
+	return s
 }
 
 // Connectors lists every configured connector, with the state of each instance that has

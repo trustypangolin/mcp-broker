@@ -113,10 +113,12 @@ type Connector struct {
 }
 
 // OAuth signs the broker in to a remote connector with the authorization code flow (PKCE).
-// The server's metadata supplies the endpoints; the client is one registered with that
-// server's authorization server, since few offer dynamic registration.
+// The server's metadata supplies the endpoints. Without a client_id, the broker registers
+// its own client with the server's authorization server (dynamic client registration) on
+// the first sign-in and reuses it after that.
 type OAuth struct {
-	ClientID string `json:"client_id" yaml:"client_id,omitempty"`
+	// ClientID is a client registered by hand; empty means dynamic registration.
+	ClientID string `json:"client_id,omitempty" yaml:"client_id,omitempty"`
 	// ClientSecret is only for confidential clients; reference ${NAME} from env_file.
 	ClientSecret string `json:"client_secret,omitempty" yaml:"client_secret,omitempty"`
 	// Scopes replaces the scopes the server advertises, which are often all of them.
@@ -128,6 +130,25 @@ type OAuth struct {
 
 // Remote reports whether the connector is reached over HTTP rather than spawned.
 func (c Connector) Remote() bool { return c.URL != "" }
+
+// OAuthSettings is how the broker signs in to the connector: its oauth block or, for a
+// remote connector with neither that nor an Authorization header, an implicit empty one
+// (dynamic client registration). The implicit one only acts when the server answers 401,
+// so servers that need no sign-in are unaffected. nil: the connector doesn't use OAuth.
+func (c Connector) OAuthSettings() (o *OAuth, implicit bool) {
+	if c.OAuth != nil {
+		return c.OAuth, false
+	}
+	if !c.Remote() {
+		return nil, false
+	}
+	for k := range c.Headers {
+		if strings.EqualFold(k, "Authorization") {
+			return nil, false
+		}
+	}
+	return &OAuth{}, true
+}
 
 // Profile is a supervised long-running local process (ComfyUI and friends).
 type Profile struct {

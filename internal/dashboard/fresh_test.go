@@ -3,10 +3,29 @@ package dashboard
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/trustypangolin/mcp-broker/internal/config"
 )
+
+func TestConnectorSignIn(t *testing.T) {
+	f := newFixture(t, strings.Replace(base, "connectors:\n", "connectors:\n  atlassian: {url: https://mcp.atlassian.com/v1/mcp}\n", 1))
+	f.signIn()
+	if code, out := f.do("POST", "/ui/api/connectors/atlassian/oauth/signin", nil, nil); code != 200 || !strings.HasPrefix(out["url"].(string), "https://") {
+		t.Errorf("signin: %d %v", code, out)
+	}
+	// fake is local: refused with the backend's reason.
+	if code, out := f.do("POST", "/ui/api/connectors/fake/oauth/signin", nil, nil); code != 400 || out["error"] == nil {
+		t.Errorf("local signin: %d %v", code, out)
+	}
+	if code, _ := f.do("POST", "/ui/api/connectors/fake/oauth/bogus", nil, nil); code != 404 {
+		t.Errorf("unknown action: %d", code)
+	}
+	if code, _ := f.do("POST", "/ui/api/connectors/fake/oauth/signin", nil, map[string]string{"X-Mcpb": ""}); code == 200 {
+		t.Error("signin without the CSRF header")
+	}
+}
 
 // TestFreshConfigPages loads every page's data on the first-run config (agents and roles,
 // no connectors). The pages read .length on these lists, so null breaks them.

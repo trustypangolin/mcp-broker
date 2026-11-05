@@ -35,10 +35,29 @@ type fakeAS struct {
 	valid     string // the access token the MCP server accepts
 	refresh   string // the refresh token the token endpoint accepts
 	issued    int
+
+	clientID      string          // the client the token endpoint accepts
+	known         map[string]bool // clients the authorize endpoint accepts
+	dcr           bool            // advertise a registration endpoint
+	noPRM         bool            // like Atlassian: no protected resource metadata, AS metadata at the MCP origin
+	registrations int
+	registered    map[string]any // the last registration request
 }
 
 func newFakeAS(t *testing.T) *fakeAS {
-	f := &fakeAS{t: t}
+	f := &fakeAS{t: t, clientID: "cid", known: map[string]bool{"cid": true}}
+	meta := func(issuer string) map[string]any {
+		m := map[string]any{
+			"issuer": issuer, "authorization_endpoint": f.as.URL + "/authorize", "token_endpoint": f.as.URL + "/token",
+			"response_types_supported": []string{"code"}, "code_challenge_methods_supported": []string{"S256"},
+			"token_endpoint_auth_methods_supported": []string{"client_secret_post", "none"},
+			"scopes_supported":                      []string{"read", "write", "offline_access"},
+		}
+		if f.dcr {
+			m["registration_endpoint"] = f.as.URL + "/register"
+		}
+		return m
+	}
 	srv := mcp.NewServer(&mcp.Implementation{Name: "fake", Version: "1"}, nil)
 	mcp.AddTool(srv, &mcp.Tool{Name: "ping"}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "pong"}}}, nil, nil
@@ -48,15 +67,32 @@ func newFakeAS(t *testing.T) *fakeAS {
 	rs := http.NewServeMux()
 	f.rs = httptest.NewServer(rs)
 	rs.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, r *http.Request) {
+		if f.noPRM {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"resource": f.rs.URL + "/mcp", "authorization_servers": []string{f.as.URL}})
+	})
+	rs.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
+		if !f.noPRM {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(meta(f.rs.URL))
 	})
 	rs.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		ok := f.valid != "" && r.Header.Get("Authorization") == "Bearer "+f.valid
+		noPRM := f.noPRM
 		f.mu.Unlock()
 		if !ok {
-			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+f.rs.URL+`/.well-known/oauth-protected-resource/mcp"`)
+			if noPRM {
+				w.Header().Set("WWW-Authenticate", `Bearer`)
+			} else {
+				w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+f.rs.URL+`/.well-known/oauth-protected-resource/mcp"`)
+			}
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -67,16 +103,28 @@ func newFakeAS(t *testing.T) *fakeAS {
 	f.as = httptest.NewServer(as)
 	as.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"issuer": f.as.URL, "authorization_endpoint": f.as.URL + "/authorize", "token_endpoint": f.as.URL + "/token",
-			"response_types_supported": []string{"code"}, "code_challenge_methods_supported": []string{"S256"},
-			"token_endpoint_auth_methods_supported": []string{"client_secret_post"},
-			"scopes_supported":                      []string{"read", "write", "offline_access"},
-		})
+		json.NewEncoder(w).Encode(meta(f.as.URL))
+	})
+	as.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		var req map[string]any
+		json.NewDecoder(r.Body).Decode(&req)
+		f.mu.Lock()
+		f.registrations++
+		f.registered = req
+		f.clientID = "dyn-" + itoa(f.registrations)
+		f.known[f.clientID] = true
+		id := f.clientID
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{"client_id": id, "redirect_uris": req["redirect_uris"], "token_endpoint_auth_method": "none"})
 	})
 	as.HandleFunc("/authorize", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		if q.Get("client_id") != "cid" || q.Get("code_challenge_method") != "S256" {
+		f.mu.Lock()
+		known := f.known[q.Get("client_id")]
+		f.mu.Unlock()
+		if !known || q.Get("code_challenge_method") != "S256" {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
@@ -89,8 +137,10 @@ func newFakeAS(t *testing.T) *fakeAS {
 		r.ParseForm()
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if r.Form.Get("client_id") != "cid" {
-			http.Error(w, `{"error":"invalid_client"}`, http.StatusUnauthorized)
+		if r.Form.Get("client_id") != f.clientID {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"error":"invalid_client"}`)
 			return
 		}
 		switch r.Form.Get("grant_type") {
@@ -157,10 +207,14 @@ func newManager(t *testing.T, dir string) *Manager {
 }
 
 func connect(t *testing.T, m *Manager, f *fakeAS) (*mcp.ClientSession, error) {
+	return connectAs(t, m, f, &config.OAuth{ClientID: "cid", Scopes: []string{"read"}})
+}
+
+func connectAs(t *testing.T, m *Manager, f *fakeAS, o *config.OAuth) (*mcp.ClientSession, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	h, err := m.Handler("svc", f.rs.URL+"/mcp", &config.OAuth{ClientID: "cid", Scopes: []string{"read"}})
+	h, err := m.Handler("svc", f.rs.URL+"/mcp", o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,6 +298,141 @@ func TestSignInRefreshAndReauth(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Error("sign out should delete the token file")
+	}
+}
+
+// follow is browser without the success check: it returns the callback's status and page.
+func follow(t *testing.T, signIn string) (int, string) {
+	t.Helper()
+	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := c.Get(signIn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	resp, err = http.Get(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(b)
+}
+
+func TestDynamicRegistration(t *testing.T) {
+	for _, atlassian := range []bool{false, true} {
+		t.Run(map[bool]string{false: "protected resource metadata", true: "atlassian style"}[atlassian], func(t *testing.T) {
+			f := newFakeAS(t)
+			f.dcr, f.noPRM, f.clientID = true, atlassian, ""
+			dir := t.TempDir()
+			m := newManager(t, dir)
+			dyn := &config.OAuth{} // a URL-only connector
+
+			// First use: registers, then hands out the sign-in link at once.
+			_, err := connectAs(t, m, f, dyn)
+			browser(t, signInRequired(t, err))
+			if err := m.Wait(context.Background(), "svc"); err != nil {
+				t.Fatal(err)
+			}
+			if f.registrations != 1 || f.registered["token_endpoint_auth_method"] != "none" || f.registered["client_name"] != "mcp-broker" {
+				t.Fatalf("registration: %d %v", f.registrations, f.registered)
+			}
+			if uris, _ := f.registered["redirect_uris"].([]any); len(uris) != 1 || uris[0] != m.o.Redirect {
+				t.Errorf("redirect_uris = %v", f.registered["redirect_uris"])
+			}
+			if !m.Registered("svc") {
+				t.Error("registration not saved")
+			}
+			sess, err := connectAs(t, m, f, dyn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sess.Close()
+
+			// A restart reuses both the token and the registration.
+			m2 := New(Options{Dir: dir, Redirect: m.o.Redirect})
+			if sess, err = connectAs(t, m2, f, dyn); err != nil {
+				t.Fatal("after restart:", err)
+			}
+			sess.Close()
+
+			// Signing out keeps the registration: signing in again doesn't register again.
+			m.SignOut("svc")
+			f.mu.Lock()
+			f.valid = "elsewhere"
+			f.mu.Unlock()
+			_, err = connectAs(t, m, f, dyn)
+			browser(t, signInRequired(t, err))
+			if err := m.Wait(context.Background(), "svc"); err != nil {
+				t.Fatal(err)
+			}
+			if f.registrations != 1 {
+				t.Errorf("registered again after sign-out: %d", f.registrations)
+			}
+
+			// The server forgets the client: the sign-in fails with invalid_client, the
+			// registration is dropped, and the next sign-in registers a new one.
+			m.SignOut("svc")
+			f.mu.Lock()
+			f.valid, f.clientID = "elsewhere", "someone-else"
+			f.mu.Unlock()
+			_, err = connectAs(t, m, f, dyn)
+			if code, page := follow(t, signInRequired(t, err)); code == http.StatusOK || !strings.Contains(page, "register a new one") {
+				t.Errorf("sign-in with a forgotten client: %d %s", code, page)
+			}
+			if m.Registered("svc") {
+				t.Error("rejected registration kept")
+			}
+			_, err = connectAs(t, m, f, dyn)
+			browser(t, signInRequired(t, err))
+			if err := m.Wait(context.Background(), "svc"); err != nil || f.registrations != 2 {
+				t.Errorf("re-registration: %v, %d registrations", err, f.registrations)
+			}
+
+			// A new redirect URL (another port) needs a new registration.
+			m3 := newManager(t, dir)
+			_, err = connectAs(t, m3, f, dyn)
+			browser(t, signInRequired(t, err))
+			m3.Wait(context.Background(), "svc")
+			if f.registrations != 3 {
+				t.Errorf("redirect change: %d registrations", f.registrations)
+			}
+		})
+	}
+}
+
+// A URL-only connector gets the implicit handler; a server that needs no sign-in must
+// connect as before, without registering or asking anyone.
+func TestImplicitOAuthOnPublicServer(t *testing.T) {
+	srv := mcp.NewServer(&mcp.Implementation{Name: "public", Version: "1"}, nil)
+	pub := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil))
+	t.Cleanup(pub.Close)
+	m := newManager(t, t.TempDir())
+	h, err := m.Handler("pub", pub.URL, &config.OAuth{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sess, err := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "1"}, nil).Connect(ctx, &mcp.StreamableClientTransport{Endpoint: pub.URL, OAuthHandler: h, MaxRetries: -1}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Close()
+	if m.Registered("pub") || m.State("pub") != "not signed in" {
+		t.Errorf("public server: registered %v, state %s", m.Registered("pub"), m.State("pub"))
+	}
+}
+
+func TestNoRegistrationEndpoint(t *testing.T) {
+	f := newFakeAS(t) // advertises no registration_endpoint
+	m := newManager(t, t.TempDir())
+	_, err := connectAs(t, m, f, &config.OAuth{})
+	if err == nil || !strings.Contains(err.Error(), "doesn't offer dynamic client registration") || !strings.Contains(err.Error(), "oauth.client_id") {
+		t.Errorf("want a clear client_id error, got %v", err)
+	}
+	if f.registrations != 0 {
+		t.Error("registered without a registration endpoint")
 	}
 }
 

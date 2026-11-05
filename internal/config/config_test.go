@@ -111,8 +111,7 @@ connectors:
 		"connectors.c.headers.Authorization",
 		"connectors.d.env.API_KEY",
 		"connectors.e: oauth only applies to remote connectors",
-		"connectors.f.oauth.client_id: required",
-		"connectors.f.oauth.client_secret",
+		"connectors.f.oauth.client_secret: needs client_id",
 		"connectors.f.oauth.redirect_url",
 		"connectors.f: set oauth or an Authorization header",
 	} {
@@ -122,6 +121,35 @@ connectors:
 	}
 	if strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "hunter3") || strings.Contains(err.Error(), "literal") {
 		t.Error("validation error leaked a secret value")
+	}
+}
+
+func TestOAuthSettings(t *testing.T) {
+	cfg, err := Parse([]byte(`
+connectors:
+  atlassian: {url: https://mcp.atlassian.com/v1/mcp}
+  dcr: {url: https://h/mcp, oauth: {scopes: [read]}}
+  xero: {url: https://h/mcp, oauth: {client_id: abc}}
+  static: {url: https://h/mcp, headers: {authorization: "Bearer ${T}"}}
+  local: {command: x}
+`), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]struct {
+		oauth, implicit bool
+		client          string
+	}{
+		"atlassian": {true, true, ""},
+		"dcr":       {true, false, ""},
+		"xero":      {true, false, "abc"},
+		"static":    {false, false, ""},
+		"local":     {false, false, ""},
+	} {
+		o, implicit := cfg.Connectors[name].OAuthSettings()
+		if (o != nil) != want.oauth || implicit != want.implicit || (o != nil && o.ClientID != want.client) {
+			t.Errorf("%s: oauth %+v implicit %v, want %+v", name, o, implicit, want)
+		}
 	}
 }
 
