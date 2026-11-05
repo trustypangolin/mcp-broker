@@ -538,7 +538,7 @@ func bestMatch(l launch, pool map[string]launch, name string) (string, relation)
 func (it *Item) markVariant(of string, l, other launch, name string, cfg *config.Config, items []Item) {
 	_, diffs, suffix := compare(l, other)
 	it.VariantOf, it.Diffs = of, diffs
-	if suffix = connectorName(strings.ToLower(filepath.Base(suffix))); suffix == "" || strings.HasPrefix(suffix, "server-") || len(suffix) > 24 {
+	if suffix = connectorName(strings.ToLower(lastElem(suffix))); suffix == "" || strings.HasPrefix(suffix, "server-") || len(suffix) > 24 {
 		suffix = suffixFor(it.Server)
 	}
 	want := name
@@ -558,10 +558,20 @@ func (it *Item) markVariant(of string, l, other launch, name string, cfg *config
 	}
 }
 
+// lastElem is the last element of a path written for any OS: a ~/.claude.json from Windows
+// names projects G:\work\alpha wherever it is read.
+func lastElem(p string) string {
+	p = strings.TrimRight(p, `/\`)
+	if i := strings.LastIndexAny(p, `/\`); i >= 0 {
+		p = p[i+1:]
+	}
+	return p
+}
+
 // suffixFor names a server's copy after where it came from: its project, else its client.
 func suffixFor(s Server) string {
 	if s.Scope != "" {
-		if n := connectorName(strings.ToLower(filepath.Base(filepath.Clean(s.Scope)))); n != "" && !strings.HasPrefix(n, "server-") {
+		if n := connectorName(strings.ToLower(lastElem(s.Scope))); n != "" && !strings.HasPrefix(n, "server-") {
 			return n
 		}
 	}
@@ -782,7 +792,7 @@ func (it *Item) build(o Options) {
 	}
 	e.Description = "Imported from " + string(s.Source.Client)
 	if s.Scope != "" {
-		e.Description += " (project " + filepath.Base(filepath.Clean(s.Scope)) + ")"
+		e.Description += " (project " + lastElem(s.Scope) + ")"
 	}
 	e.IdleUnload = "30m"
 	it.Entry = e

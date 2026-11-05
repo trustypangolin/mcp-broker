@@ -224,6 +224,21 @@ func TestBareCommandMatchesFullPath(t *testing.T) {
 	}
 }
 
+// Paths from a Windows config split the same on every OS.
+func TestPathsFromAnyOS(t *testing.T) {
+	for in, want := range map[string]string{`G:\src\imap-mcp-server`: "imap-mcp-server", "/home/a/proj/": "proj", `C:\x/y\z`: "z", "plain": "plain"} {
+		if got := lastElem(in); got != want {
+			t.Errorf("lastElem(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if c := SourceFor(`C:\work\app\.vscode\mcp.json`).Client; c != VSCode {
+		t.Errorf("Windows VS Code path read as %s", c)
+	}
+	if c := SourceFor(`C:\Users\a\.cursor\mcp.json`).Client; c != Cursor {
+		t.Errorf("Windows Cursor path read as %s", c)
+	}
+}
+
 func TestRenameUsesProjectName(t *testing.T) {
 	cfg := variantConfig(t)
 	items := planText(t, cfg, ".claude.json", `{"projects": {"G:\\src\\imap-mcp-server": {"mcpServers": {"imap": {"command": "npx", "args": ["imap-mcp-server"]}}}}}`)

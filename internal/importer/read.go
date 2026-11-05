@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -137,9 +138,10 @@ func claudeDesktopConfig(roaming, localAppData string) string {
 
 // SourceFor guesses what kind of client config path is from its name.
 func SourceFor(path string) Source {
-	norm := strings.ToLower(filepath.ToSlash(path))
-	base := filepath.Base(norm)
-	dir := filepath.Base(filepath.Dir(norm))
+	// Split on both separators: a path from a Windows config may be read anywhere.
+	norm := strings.ToLower(strings.ReplaceAll(path, `\`, "/"))
+	base := pathpkg.Base(norm)
+	dir := pathpkg.Base(pathpkg.Dir(norm))
 	src := Source{Client: Generic, Path: path, Key: "mcpServers"}
 	switch {
 	case base == "claude_desktop_config.json":
