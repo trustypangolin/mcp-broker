@@ -211,6 +211,8 @@ func (d *Dashboard) Mount(mux *http.ServeMux) {
 	mux.Handle("GET /ui/api/profiles/{name}/logs", d.api(viewer, d.profileLogs))
 	mux.Handle("GET /ui/api/profiles/{name}/plan", d.api(admin, d.profilePlan))
 	mux.Handle("POST /ui/api/profiles/{name}/{action}", d.api(admin, d.profileAction))
+	mux.Handle("PUT /ui/api/profiles/{name}", d.api(admin, d.putProfile))
+	mux.Handle("DELETE /ui/api/profiles/{name}", d.api(admin, d.deleteProfile))
 
 	mux.Handle("POST /ui/api/reload", d.api(admin, d.reload))
 	mux.Handle("POST /ui/api/update", d.api(admin, d.applyUpdate))

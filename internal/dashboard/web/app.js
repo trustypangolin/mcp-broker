@@ -359,20 +359,156 @@ pages.profiles = async (main) => {
           : data.admin && h("button", { class: "primary", disabled: p.state === "updating" || p.state === "stopping", onclick: () => showPlan(p.profile, "start") }, "Start…"),
         data.admin && h("button", { disabled: p.state !== "stopped" && p.state !== "exited", onclick: () => showPlan(p.profile, "update") }, "Update…"),
         h("button", { onclick: () => showLogs(p.profile) }, "Logs"),
-        data.admin && h("button", { onclick: () => groupDialog("profiles", data.profiles, (x) => x.profile, { move: p.profile }) }, "Group…"))]);
+        data.admin && p.def && h("button", { onclick: () => editProfile(p.profile, p.def, data.profiles, { running: isLive(p.state) }) }, "Edit"),
+        data.admin && p.def && h("button", { onclick: () => editProfile(null, p.def, data.profiles, { from: p.profile }) }, "Duplicate"),
+        data.admin && h("button", { onclick: () => groupDialog("profiles", data.profiles, (x) => x.profile, { move: p.profile }) }, "Group…"),
+        data.admin && h("button", { class: "danger", disabled: isLive(p.state), title: isLive(p.state) ? "Stop it first" : undefined, onclick: (ev) => removeProfile(ev.target, p.profile) }, "Remove")),
+      (p.issues || []).map((i) => h("div", { class: i.startsWith("error") ? "bad" : "warn" }, i))]);
     const cards = grouped("profiles", data.profiles, (x) => x.profile, card, data.admin);
     fill(main,
       h("div", { class: "row spread" }, h("h2", {}, "Profiles"),
-        cards.length > 0 && h("div", { class: "row" },
-          h("button", { class: "link", onclick: () => foldAll(main, false) }, "Expand all"),
-          h("button", { class: "link", onclick: () => foldAll(main, true) }, "Collapse all"),
-          data.admin && h("button", { onclick: () => groupDialog("profiles", data.profiles, (x) => x.profile) }, "New group"))),
+        h("div", { class: "row" },
+          cards.length > 0 && h("button", { class: "link", onclick: () => foldAll(main, false) }, "Expand all"),
+          cards.length > 0 && h("button", { class: "link", onclick: () => foldAll(main, true) }, "Collapse all"),
+          data.admin && cards.length > 0 && h("button", { onclick: () => groupDialog("profiles", data.profiles, (x) => x.profile) }, "New group"),
+          data.admin && h("button", { class: "primary", onclick: () => editProfile(null, {}, data.profiles) }, "Add profile"))),
       h("p", { class: "muted" }, "Long-running apps the broker starts, health-checks and always stops, child processes included. Agents use them through the profile tool, with approval where their role says so."),
-      cards.length ? cards : h("div", { class: "card empty" }, "No profiles configured. Add them under profiles: in the Config tab."));
+      cards.length ? cards : h("div", { class: "card empty" }, "No profiles configured yet."));
   };
   await render();
   pageTimer = setInterval(() => current === "profiles" && !document.querySelector("dialog") && render().catch(() => {}), 3000);
 };
+
+const isLive = (state) => ["starting", "ready", "unhealthy", "stopping", "updating"].includes(state);
+
+// words splits a command line into arguments: spaces separate them, "double" or 'single'
+// quotes keep spaces in one. Backslashes are literal, so Windows paths type as they are.
+function words(s) {
+  const out = [];
+  let cur = null, q = null;
+  for (const c of s) {
+    if (q) {
+      if (c === q) q = null;
+      else cur += c;
+    } else if (c === '"' || c === "'") {
+      q = c;
+      cur = cur || "";
+    } else if (/\s/.test(c)) {
+      if (cur !== null) out.push(cur), (cur = null);
+    } else {
+      cur = (cur || "") + c;
+    }
+  }
+  if (q) throw new Error("Unclosed " + q + " in: " + s);
+  if (cur !== null) out.push(cur);
+  return out;
+}
+// unwords is the reverse: quotes only the arguments that need it.
+const unwords = (args) => args.map((a) => (a === "" || /[\s"']/.test(a) ? (a.includes('"') ? "'" + a + "'" : '"' + a + '"') : a)).join(" ");
+
+// editProfile edits a profile (name set), adds one (name null), or duplicates one
+// (opts.from). Fields left empty are left out of broker.yaml, so the broker's defaults apply.
+function editProfile(name, def, items, opts = {}) {
+  const dl = groupList(items || []);
+  const taken = new Set((items || []).map((i) => i.profile));
+  const unique = (base) => {
+    if (!taken.has(base)) return base;
+    for (let i = 2; ; i++) if (!taken.has(base + "-" + i)) return base + "-" + i;
+  };
+  const hl = def.health || {}, st = def.stop || {};
+  const check = (on) => h("input", { type: "checkbox", checked: !!on });
+  const f = {
+    name: h("input", { value: name || (opts.from ? unique(opts.from + "-copy") : ""), disabled: !!name, placeholder: "comfyui" }),
+    description: h("input", { value: def.description || "" }),
+    group: h("input", { value: def.group || "", list: dl.id, placeholder: "none" }),
+    command: h("input", { value: def.command || "", placeholder: "C:\\app\\venv\\Scripts\\python.exe" }),
+    args: h("textarea", { value: (def.args || []).join("\n"), rows: 6 }),
+    cwd: h("input", { value: def.cwd || "" }),
+    env: h("textarea", { value: kvText(def.env), placeholder: "NAME=value" }),
+    env_file: h("input", { value: def.env_file || "", placeholder: "G:\\Ai\\.env" }),
+    path_prepend: h("textarea", { value: (def.path_prepend || []).join("\n"), rows: 2 }),
+    ports: h("input", { value: (def.ports || []).join(", "), placeholder: "8188" }),
+    requires_paths: h("textarea", { value: (def.requires_paths || []).join("\n"), rows: 2 }),
+    network_exposed: check(def.network_exposed),
+    console: check(def.console),
+    detach: check(def.detach),
+    http: h("input", { value: hl.http || "", placeholder: "http://127.0.0.1:8188/system_stats" }),
+    interval: h("input", { value: hl.interval || "", placeholder: "3s" }),
+    start_timeout: h("input", { value: hl.start_timeout || "", placeholder: "2m" }),
+    log_ready_regex: h("input", { value: hl.log_ready_regex || "" }),
+    graceful: h("select", {}, ["", "ctrl_break", "sigterm", "none"].map((g) =>
+      h("option", { value: g, selected: (st.graceful || "") === g }, g || "default (CTRL_BREAK on Windows, SIGTERM elsewhere)"))),
+    stop_timeout: h("input", { value: st.timeout || "", placeholder: "20s" }),
+    update: h("textarea", { value: (def.update || []).map(unwords).join("\n"), rows: 8, style: "font-family:monospace" }),
+  };
+  const box = (el, label) => h("label", {}, el, label);
+  dialog(name ? "Edit " + name : opts.from ? "Duplicate " + opts.from : "Add profile",
+    h("div", {},
+      opts.running && h("p", { class: "warn" }, name + " is running. It keeps its current settings until it is stopped and started again."),
+      opts.from && h("p", { class: "hint" }, "A copy of ", h("b", {}, opts.from), ". Profiles on the same port can't run at the same time."),
+      h("div", { class: "grid2" }, field("Name", f.name), field("Group", f.group, "A heading on this page only.")),
+      dl.el,
+      field("Description", f.description, "Shown to agents in list_profiles."),
+      field("Command", f.command),
+      field("Arguments", f.args, "One per line. ${NAME} takes a value from the env file or the environment."),
+      h("div", { class: "grid2" }, field("Working directory", f.cwd), field("Ports", f.ports, "Comma-separated. Start is refused while another process holds one.")),
+      field("Env file", f.env_file, "KEY=value lines, read fresh on every start and update; values are redacted everywhere."),
+      field("Environment", f.env, "NAME=value, one per line. Put secrets in the env file instead."),
+      h("div", { class: "grid2" },
+        field("Prepend to PATH", f.path_prepend, "Folders, one per line."),
+        field("Requires paths", f.requires_paths, "Start is refused until these exist (drives not always mounted).")),
+      h("div", { class: "checks", style: "margin-top:10px" },
+        box(f.network_exposed, "Listens beyond this PC (start always asks)"), box(f.console, "Own console window"), box(f.detach, "Detach (not supported yet: runs stop with the broker)")),
+      h("h3", {}, "Health"),
+      field("HTTP check", f.http, "Ready once this URL answers 2xx."),
+      h("div", { class: "grid2" }, field("Check every", f.interval), field("Give up starting after", f.start_timeout)),
+      field("Ready when the log matches", f.log_ready_regex, "A regular expression; an alternative or addition to the HTTP check."),
+      h("h3", {}, "Stop"),
+      h("div", { class: "grid2" }, field("Graceful stop", f.graceful), field("Kill after", f.stop_timeout)),
+      h("h3", {}, "Update"),
+      field("Update steps", f.update, "One command per line, run in order by Update…; the first failure stops the rest. Quote arguments with spaces in \"double\" or 'single' quotes. ${NAME} works here too, e.g. git reset --hard ${COMFYUI_VERSION}.")),
+    (close) => [
+      h("button", { onclick: close }, "Cancel"),
+      h("button", { class: "primary", onclick: (ev) => run(ev.target, async () => {
+        const n = f.name.value.trim();
+        if (!n) throw new Error("Give the profile a name.");
+        const ports = f.ports.value.split(",").map((p) => p.trim()).filter(Boolean).map((p) => {
+          const v = Number(p);
+          if (!Number.isInteger(v) || v < 1 || v > 65535) throw new Error("Not a port: " + p);
+          return v;
+        });
+        const body = {
+          description: f.description.value.trim() || undefined,
+          group: f.group.value.trim() || undefined,
+          cwd: f.cwd.value.trim() || undefined,
+          command: f.command.value.trim(),
+          args: lines(f.args.value),
+          env_file: f.env_file.value.trim() || undefined,
+          env: kv(f.env.value),
+          path_prepend: lines(f.path_prepend.value),
+          ports,
+          requires_paths: lines(f.requires_paths.value),
+          network_exposed: f.network_exposed.checked,
+          console: f.console.checked,
+          detach: f.detach.checked,
+          health: { http: f.http.value.trim(), interval: f.interval.value.trim(), start_timeout: f.start_timeout.value.trim(), log_ready_regex: f.log_ready_regex.value.trim() },
+          stop: { graceful: f.graceful.value, timeout: f.stop_timeout.value.trim() },
+          update: lines(f.update.value).map(words),
+        };
+        toast(reloadSummary(await api("PUT", "profiles/" + encodeURIComponent(n) + (name ? "" : "?new=1"), body)));
+        close();
+        route();
+      }) }, "Save and apply"),
+    ]);
+}
+
+async function removeProfile(btn, name) {
+  if (!confirm("Remove the profile " + name + " from broker.yaml? The previous file is kept as broker.yaml.bak.")) return;
+  await run(btn, async () => {
+    toast(reloadSummary(await api("DELETE", "profiles/" + encodeURIComponent(name))));
+    route();
+  });
+}
 
 async function profileAction(btn, name, action) {
   await run(btn, async () => {
