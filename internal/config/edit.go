@@ -63,6 +63,7 @@ func SetEntry(data []byte, section, key string, value any) ([]byte, error) {
 			return nil, err
 		}
 		if idx >= 0 {
+			keepLayout(sec.Content[idx+1], &v)
 			v.HeadComment, v.LineComment = sec.Content[idx+1].HeadComment, sec.Content[idx+1].LineComment
 			sec.Content[idx+1] = &v
 		} else {
@@ -137,6 +138,49 @@ func SetFields(data []byte, section string, keys []string, field, value string) 
 	}
 	enc.Close()
 	return buf.Bytes(), nil
+}
+
+// keepLayout carries what a person wrote in old over to its re-encoded replacement nw:
+// comments on keys and values that are still there, and the quoting of scalars whose value
+// didn't change. Mappings match by key, sequences by position.
+func keepLayout(old, nw *yaml.Node) {
+	if old == nil || nw == nil || old.Kind != nw.Kind {
+		return
+	}
+	nw.HeadComment, nw.LineComment, nw.FootComment = old.HeadComment, old.LineComment, old.FootComment
+	if nw.Kind != yaml.ScalarNode { // inline [a, b] / {a: b} or block, as the file had it
+		nw.Style = nw.Style&^yaml.FlowStyle | old.Style&yaml.FlowStyle
+	}
+	switch nw.Kind {
+	case yaml.ScalarNode:
+		if old.Value == nw.Value {
+			nw.Style = old.Style
+		}
+	case yaml.SequenceNode:
+		for i := 0; i < len(nw.Content) && i < len(old.Content); i++ {
+			keepLayout(old.Content[i], nw.Content[i])
+		}
+	case yaml.MappingNode:
+		// Keys the file already had keep its order (Go maps encode sorted); new keys follow.
+		var kept, added []*yaml.Node
+		for j := 0; j+1 < len(old.Content); j += 2 {
+			for i := 0; i+1 < len(nw.Content); i += 2 {
+				if old.Content[j].Value == nw.Content[i].Value {
+					k, ok := nw.Content[i], old.Content[j]
+					k.HeadComment, k.LineComment, k.FootComment = ok.HeadComment, ok.LineComment, ok.FootComment
+					keepLayout(old.Content[j+1], nw.Content[i+1])
+					kept = append(kept, nw.Content[i], nw.Content[i+1])
+					break
+				}
+			}
+		}
+		for i := 0; i+1 < len(nw.Content); i += 2 {
+			if lookup(old, nw.Content[i].Value) == nil {
+				added = append(added, nw.Content[i], nw.Content[i+1])
+			}
+		}
+		nw.Content = append(kept, added...)
+	}
 }
 
 func lookup(m *yaml.Node, key string) *yaml.Node {

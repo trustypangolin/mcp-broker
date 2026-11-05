@@ -248,6 +248,16 @@ The broker owns every process it starts, children included, and stops them all w
 exits. You can start and stop profiles from the tray's Profiles menu, the dashboard's
 Profiles page (with live logs), or `mcp-broker ps | start | stop | update | logs`.
 
+The Profiles page also adds, edits, duplicates and removes profiles (**Add profile**,
+**Edit**, **Duplicate**, **Remove**), so you don't have to edit `broker.yaml` by hand. The
+form shows each entry as the file has it, with `${NAME}` unexpanded and defaults not filled
+in, and a save rewrites only that entry: comments, quoting and key order are kept, and the
+previous file is kept as `broker.yaml.bak`. Update steps are one command per line; quote an
+argument that contains spaces. A running profile keeps its old settings until its next
+start, and it can't be removed until it is stopped. Values from `env_file` are read again on
+every start and update, so pinning a version there (`git reset --hard ${COMFYUI_VERSION}`)
+takes effect at the next **Update…** without touching the profile.
+
 Without the tray: `mcp-broker init`, `mcp-broker token create <agent> --save`,
 `mcp-broker serve`, and `mcp-broker dashboard` to open the settings.
 

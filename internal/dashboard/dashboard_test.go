@@ -57,6 +57,9 @@ func (b *backend) Reload() (server.Reloaded, error) {
 	b.mu.Lock()
 	b.cfg = cfg
 	b.reloads++
+	if b.sup != nil {
+		b.sup.SetConfig(cfg)
+	}
 	b.mu.Unlock()
 	return server.Reloaded{}, nil
 }
@@ -393,6 +396,59 @@ func TestSetGroup(t *testing.T) {
 		if st, _ := f.do("POST", "/ui/api/groups", body, nil); st == 200 {
 			t.Errorf("accepted %v", body)
 		}
+	}
+}
+
+func TestProfileForm(t *testing.T) {
+	f := newFixture(t, base+"profiles:\n  # kept\n  app:\n    command: app.exe\n    env_file: app.env\n    update:\n      - [git, pull]\n")
+	f.signIn()
+	_, out := f.do("GET", "/ui/api/profiles", nil, nil)
+	def := out["profiles"].([]any)[0].(map[string]any)["def"].(map[string]any)
+	if def["env_file"] != "app.env" || def["health"] != nil { // as written: not made absolute, no defaults
+		t.Fatalf("def: %v", def)
+	}
+
+	e := config.ProfileEntry{Command: "app.exe", EnvFile: "app.env", Ports: []int{9000},
+		Health: &config.HealthEntry{HTTP: "http://127.0.0.1:9000/"}, Stop: &config.StopEntry{},
+		Update: []config.FlowList{{"git", "pull"}, {"git", "reset", "--hard", "${APP_VERSION}"}}}
+	if st, out := f.do("PUT", "/ui/api/profiles/app", e, nil); st != 200 {
+		t.Fatalf("put: %d %v", st, out)
+	}
+	p := f.b.Config().Profiles["app"]
+	if len(p.Update) != 2 || p.Ports[0] != 9000 || p.Health.HTTP == "" {
+		t.Fatalf("saved: %+v", p)
+	}
+	data, _ := os.ReadFile(f.b.path)
+	if s := string(data); !strings.Contains(s, "# kept\n  app:") || !strings.Contains(s, "- [git, reset, --hard, '${APP_VERSION}']") || strings.Contains(s, "stop:") {
+		t.Errorf("file:\n%s", s)
+	}
+
+	for _, c := range []struct {
+		path string
+		e    config.ProfileEntry
+		want int
+	}{
+		{"/ui/api/profiles/app?new=1", config.ProfileEntry{Command: "x"}, http.StatusConflict},
+		{"/ui/api/profiles/nocmd", config.ProfileEntry{}, http.StatusBadRequest},
+		{"/ui/api/profiles/..%2Fx", config.ProfileEntry{Command: "x"}, http.StatusBadRequest},
+		{"/ui/api/profiles/bad", config.ProfileEntry{Command: "x", Stop: &config.StopEntry{Timeout: "soon"}}, http.StatusUnprocessableEntity},
+	} {
+		if st, out := f.do("PUT", c.path, c.e, nil); st != c.want {
+			t.Errorf("%s: %d %v, want %d", c.path, st, out, c.want)
+		}
+	}
+
+	if st, out := f.do("PUT", "/ui/api/profiles/app-copy?new=1", config.ProfileEntry{Command: "app.exe"}, nil); st != 200 {
+		t.Fatalf("add: %d %v", st, out)
+	}
+	if _, out := f.do("GET", "/ui/api/profiles", nil, nil); len(out["profiles"].([]any)) != 2 {
+		t.Errorf("list after add: %v", out)
+	}
+	if st, _ := f.do("DELETE", "/ui/api/profiles/app-copy", nil, nil); st != 200 || len(f.b.Config().Profiles) != 1 {
+		t.Errorf("delete: %d", st)
+	}
+	if st, _ := f.do("DELETE", "/ui/api/profiles/app-copy", nil, nil); st != http.StatusNotFound {
+		t.Errorf("delete missing: %d", st)
 	}
 }
 
