@@ -888,6 +888,9 @@ const strictness = { allow: 0, approve: 1, deny: 2 };
 // Classes whose tools can change or leak things: allowing them without asking gets a warning.
 const riskyClass = new Set(["destructive", "external", "spend", "exec"]);
 const treeAgentKey = "mcpb.treeAgent";
+// "Asking you every time" lists only recent asks, and Dismiss hides it until the next one.
+const hotDismissKey = "mcpb.hotDismissed"; // agent → newest ask time when dismissed
+const hotDays = 7;
 
 // confirmRisky asks before allowing a tool of a risky class without approval.
 function confirmRisky(what, cls, role, shares) {
@@ -946,6 +949,8 @@ pages.tools = async (main) => {
   try { agent = localStorage.getItem(treeAgentKey) || ""; } catch { /* private window */ }
   let data;
   let filter = "";
+  let dismissed = {};
+  try { dismissed = JSON.parse(localStorage.getItem(hotDismissKey) || "{}") || {}; } catch { /* private window */ }
   const tree = h("div", {});
   const head = h("div", {});
 
@@ -1004,14 +1009,24 @@ pages.tools = async (main) => {
         ". A rule on a tool beats one on its connector."));
 
     const conns = data.connectors || [];
-    const hot = conns.flatMap((c) => c.tools.filter((t) => t.asked && t.action === "approve" && match(c, t)).map((t) => [c, t]))
+    // Tools that keep asking and nobody has decided on: an explicit Ask rule is a decision,
+    // asks older than hotDays are stale, and Dismiss hides asks up to the newest one shown.
+    // Dismiss saves the newest ask's server time, so the browser's clock can't skew it.
+    const since = Math.max(Date.now() - hotDays * 864e5, Date.parse(dismissed[agent] || "") || 0);
+    const hot = conns.flatMap((c) => c.tools.filter((t) => t.asked && t.action === "approve" &&
+      t.rule !== "approve" && c.rule !== "approve" && t.last && Date.parse(t.last) > since && match(c, t)).map((t) => [c, t]))
       .sort((a, b) => b[1].asked - a[1].asked);
+    const dismissHot = () => {
+      dismissed[agent] = hot.map(([, t]) => t.last).reduce((a, b) => (Date.parse(a) > Date.parse(b) ? a : b));
+      try { localStorage.setItem(hotDismissKey, JSON.stringify(dismissed)); } catch { /* private window */ }
+      draw();
+    };
     const card = (c) => {
       const tools = c.tools.filter((t) => match(c, t));
       const n = { allow: 0, approve: 0, deny: 0 };
       for (const t of c.tools) n[t.action]++;
       const asked = c.tools.reduce((s, t) => s + (t.action === "approve" ? t.asked || 0 : 0), 0);
-      const known = c.seen || c.tools.length;
+      const known = Boolean(c.seen || c.tools.length); // a bare 0 would render as text
       // While filtering, matches show open without touching the remembered fold state.
       return fold(filter ? "tools:filter:" + c.name : "tools:" + agent + ":" + c.name, !filter, "card", [
         h("h3", {}, c.name,
@@ -1048,8 +1063,11 @@ pages.tools = async (main) => {
           "load_connector lists a connector's tools one line each (the figure on each connector); describe_tool then fetches one tool's schema (the figure on each tool). ",
           "Denying a tool hides it from both. Listing every connector would come to about ", h("b", {}, fmtTok(everything)), " tokens.")),
       hot.length > 0 && h("div", { class: "card hot-list" },
-        h("h3", {}, "Asking you every time"),
-        h("div", { class: "hint" }, "Tools ", agent, " has called that still need approval. Set Allow to stop the prompts."),
+        h("div", { class: "row spread" },
+          h("h3", {}, "Asking you every time"),
+          h("button", { class: "link", title: "Hide this list until one of these tools asks again", onclick: dismissHot }, "Dismiss")),
+        h("div", { class: "hint" }, "Tools ", agent, " called in the last " + hotDays + " days that still need approval. ",
+          "Set Allow to stop the prompts, or Ask to keep them and drop the tool from this list."),
         h("div", { class: "tool-list" }, hot.map(([c, t]) => toolRow(c, t, true)))),
       visible.length ? grouped("tools", visible, (c) => c.name, card, false, groupCost) : h("div", { class: "card empty" }, "No connectors match."));
   };
