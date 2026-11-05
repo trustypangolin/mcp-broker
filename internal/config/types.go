@@ -126,6 +126,10 @@ type OAuth struct {
 	// RedirectURL defaults to http://localhost:<port>/oauth/callback on this broker; it
 	// must match the one registered for the client exactly.
 	RedirectURL string `json:"redirect_url,omitempty" yaml:"redirect_url,omitempty"`
+	// PrivateNetwork lets sign-in reach authorization servers on private, link-local or
+	// CGNAT addresses, such as a self-hosted GitLab behind a VPN. Without it the MCP SDK
+	// refuses them, to stop a server pointing the broker at the local network.
+	PrivateNetwork bool `json:"private_network,omitempty" yaml:"private_network,omitempty"`
 }
 
 // Remote reports whether the connector is reached over HTTP rather than spawned.

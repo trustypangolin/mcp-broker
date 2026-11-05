@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -61,7 +62,8 @@ type Options struct {
 
 // Manager runs sign-ins and owns the token files.
 type Manager struct {
-	o Options
+	o       Options
+	private *http.Client // o.Client, dialing for itself: see httpClient
 
 	mu      sync.Mutex
 	pending map[string]*signIn // by connector
@@ -76,7 +78,58 @@ func New(o Options) *Manager {
 	if o.Client == nil {
 		o.Client = &http.Client{Timeout: 30 * time.Second}
 	}
-	return &Manager{o: o, pending: map[string]*signIn{}, byState: map[string]*signIn{}}
+	return &Manager{o: o, private: privateClient(o.Client), pending: map[string]*signIn{}, byState: map[string]*signIn{}}
+}
+
+// httpClient is the client for a connector's OAuth requests. The MCP SDK refuses metadata,
+// registration and token requests that dial private, link-local or CGNAT addresses (SSRF
+// protection), except through a transport that dials for itself. private_network opts a
+// connector into that.
+func (m *Manager) httpClient(o *config.OAuth) *http.Client {
+	if o != nil && o.PrivateNetwork {
+		return m.private
+	}
+	return m.o.Client
+}
+
+// privateClient is c with a transport that sets its own DialContext, which the SDK takes
+// as the caller owning dialing and so skips its address checks. A custom transport already
+// skips them.
+func privateClient(c *http.Client) *http.Client {
+	var t *http.Transport
+	switch base := c.Transport.(type) {
+	case nil:
+		t = http.DefaultTransport.(*http.Transport).Clone()
+	case *http.Transport:
+		t = base.Clone()
+	default:
+		return c
+	}
+	if t.DialContext == nil {
+		t.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	}
+	pc := *c
+	pc.Transport = t
+	return &pc
+}
+
+// privateHint explains the SDK's refusal of a private address, which otherwise reads as
+// a bare dial error.
+func privateHint(err error, o *config.OAuth) error {
+	if err == nil || (o != nil && o.PrivateNetwork) || !strings.Contains(err.Error(), "non-public") {
+		return err
+	}
+	return fmt.Errorf("%w (the authorization server is on a private network: if you trust it, set private_network: true under the connector's oauth block)", err)
+}
+
+// hintHandler adds privateHint to the SDK handler's sign-in errors.
+type hintHandler struct {
+	auth.OAuthHandler
+	o *config.OAuth
+}
+
+func (h hintHandler) Authorize(ctx context.Context, req *http.Request, resp *http.Response) error {
+	return privateHint(h.OAuthHandler.Authorize(ctx, req, resp), h.o)
 }
 
 // signIn is one sign-in waiting for, or finishing after, the browser.
@@ -125,7 +178,11 @@ func (m *Manager) Handler(name, endpoint string, o *config.OAuth) (auth.OAuthHan
 		return nil, &SignInRequired{Connector: name, URL: url}
 	}
 	cfg.InitialTokenSource = m.stored(name, o)
-	return auth.NewAuthorizationCodeHandler(cfg)
+	h, err := auth.NewAuthorizationCodeHandler(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return hintHandler{h, o}, nil
 }
 
 func (m *Manager) redirect(o *config.OAuth) string {
@@ -164,7 +221,7 @@ func (m *Manager) handlerConfig(name string, o *config.OAuth, client *oauthex.Cl
 		RequestRefreshToken: true,
 		// Servers that send iss without advertising it are common; it must still match.
 		AcceptUnadvertisedIss: true,
-		Client:                m.o.Client,
+		Client:                m.httpClient(o),
 		NewTokenSource: func(ctx context.Context, c *oauth2.Config, tok *oauth2.Token) (oauth2.TokenSource, error) {
 			rec := record{ClientID: c.ClientID, TokenURL: c.Endpoint.TokenURL, AuthStyle: c.Endpoint.AuthStyle, Token: tok}
 			if err := m.save(name, rec); err != nil {
@@ -254,9 +311,9 @@ func (m *Manager) authorize(ctx context.Context, s *signIn, endpoint string, o *
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	resp, err := m.o.Client.Do(req)
+	resp, err := m.httpClient(o).Do(req)
 	if err != nil {
-		return fmt.Errorf("reaching %s: %w", endpoint, err)
+		return privateHint(fmt.Errorf("reaching %s: %w", endpoint, err), o)
 	}
 	if resp.StatusCode != http.StatusUnauthorized {
 		resp.Body.Close()
@@ -268,7 +325,7 @@ func (m *Manager) authorize(ctx context.Context, s *signIn, endpoint string, o *
 		reg, err := m.register(ctx, s.connector, endpoint, resp.Header, o)
 		if err != nil {
 			resp.Body.Close()
-			return err
+			return privateHint(err, o)
 		}
 		client = &oauthex.ClientCredentials{ClientID: reg.ClientID, Issuer: reg.Issuer}
 		if reg.ClientSecret != "" {
@@ -310,7 +367,7 @@ func (m *Manager) authorize(ctx context.Context, s *signIn, endpoint string, o *
 		m.forgetRegistration(s.connector)
 		return fmt.Errorf("%s no longer knows the broker's client registration; sign in again to register a new one (%w)", s.connector, err)
 	}
-	return err
+	return privateHint(err, o)
 }
 
 // registration is a client the broker registered with an authorization server (RFC 7591),
@@ -353,11 +410,11 @@ func (m *Manager) Registered(name string) bool {
 // register finds the connector's authorization server and registers a public client with
 // it, for servers that offer dynamic client registration instead of a developer console.
 func (m *Manager) register(ctx context.Context, name, endpoint string, challenge http.Header, o *config.OAuth) (registration, error) {
-	issuer, err := m.authServer(ctx, endpoint, challenge)
+	issuer, err := m.authServer(ctx, endpoint, challenge, m.httpClient(o))
 	if err != nil {
 		return registration{}, err
 	}
-	asm, err := auth.GetAuthServerMetadata(ctx, issuer, m.o.Client)
+	asm, err := auth.GetAuthServerMetadata(ctx, issuer, m.httpClient(o))
 	if err != nil {
 		return registration{}, fmt.Errorf("reading %s's authorization server metadata: %w", name, err)
 	}
@@ -377,7 +434,7 @@ func (m *Manager) register(ctx context.Context, name, endpoint string, challenge
 		TokenEndpointAuthMethod: "none",
 		Scope:                   strings.Join(o.Scopes, " "),
 	}
-	resp, err := oauthex.RegisterClient(ctx, regEndpoint, meta, m.o.Client)
+	resp, err := oauthex.RegisterClient(ctx, regEndpoint, meta, m.httpClient(o))
 	if err != nil {
 		return registration{}, fmt.Errorf("registering a client for %s at %s: %w", name, regEndpoint, err)
 	}
@@ -398,7 +455,7 @@ func (m *Manager) register(ctx context.Context, name, endpoint string, challenge
 // protected resource metadata from the 401 challenge, then at the endpoint's path, then at
 // the root; failing all of those, the endpoint's origin (servers such as Atlassian publish
 // only authorization server metadata).
-func (m *Manager) authServer(ctx context.Context, endpoint string, challenge http.Header) (string, error) {
+func (m *Manager) authServer(ctx context.Context, endpoint string, challenge http.Header, hc *http.Client) (string, error) {
 	ru, err := url.Parse(endpoint)
 	if err != nil {
 		return "", err
@@ -421,7 +478,7 @@ func (m *Manager) authServer(ctx context.Context, endpoint string, challenge htt
 	origin.Path, origin.RawQuery, origin.Fragment = "", "", ""
 	tries = append(tries, try{mu.String(), origin.String()})
 	for _, t := range tries {
-		prm, err := oauthex.GetProtectedResourceMetadata(ctx, t.meta, t.resource, m.o.Client)
+		prm, err := oauthex.GetProtectedResourceMetadata(ctx, t.meta, t.resource, hc)
 		if err != nil || prm == nil {
 			continue
 		}
@@ -558,7 +615,7 @@ func (m *Manager) stored(name string, o *config.OAuth) oauth2.TokenSource {
 	}
 	c := &oauth2.Config{ClientID: client.ClientID, ClientSecret: secret,
 		Endpoint: oauth2.Endpoint{TokenURL: rec.TokenURL, AuthStyle: rec.AuthStyle}}
-	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, m.o.Client)
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, m.httpClient(o))
 	return &savingSource{m: m, name: name, rec: rec, base: c.TokenSource(ctx, rec.Token)}
 }
 

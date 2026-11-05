@@ -141,6 +141,24 @@ config, refreshing it from then on. If an agent gets there first, `load_connecto
 at once with the sign-in link and the tray offers it as a notification. `mcp-broker status`
 shows connectors still waiting for a sign-in; `mcp-broker signout xero` forgets the token.
 
+Servers on a private network, such as a self-hosted GitLab reached over a VPN or
+Tailscale, need one more line. The MCP SDK refuses to fetch sign-in metadata from private,
+link-local and CGNAT addresses, so that a server can't point the broker at your local
+network. Sign-in then fails with `non-public ip address`. If you trust the server, opt
+that connector in:
+
+```yaml
+connectors:
+  gitlab:
+    url: https://gitlab.example.internal/api/v4/mcp
+    oauth:
+      private_network: true
+      scopes: [mcp]
+```
+
+Reach the server by host name. The SDK refuses a private IP address written into a URL even
+with this option set.
+
 ## Profiles: long-running apps
 
 A profile is an app the broker runs for agents and for you, such as ComfyUI:

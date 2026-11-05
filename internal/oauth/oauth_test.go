@@ -3,10 +3,12 @@ package oauth
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -44,7 +46,24 @@ type fakeAS struct {
 	registered    map[string]any // the last registration request
 }
 
-func newFakeAS(t *testing.T) *fakeAS {
+func newFakeAS(t *testing.T) *fakeAS { return newFakeASAt(t, "") }
+
+// newFakeASAt is newFakeAS listening on bind instead of loopback.
+func newFakeASAt(t *testing.T, bind string) *fakeAS {
+	serve := func(h http.Handler) *httptest.Server {
+		if bind == "" {
+			return httptest.NewServer(h)
+		}
+		l, err := net.Listen("tcp", net.JoinHostPort(bind, "0"))
+		if err != nil {
+			t.Skipf("cannot listen on %s: %v", bind, err)
+		}
+		s := httptest.NewUnstartedServer(h)
+		s.Listener.Close()
+		s.Listener = l
+		s.StartTLS() // the SDK only accepts HTTPS beyond loopback
+		return s
+	}
 	f := &fakeAS{t: t, clientID: "cid", known: map[string]bool{"cid": true}}
 	meta := func(issuer string) map[string]any {
 		m := map[string]any{
@@ -65,7 +84,7 @@ func newFakeAS(t *testing.T) *fakeAS {
 	mcpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 
 	rs := http.NewServeMux()
-	f.rs = httptest.NewServer(rs)
+	f.rs = serve(rs)
 	rs.HandleFunc("/.well-known/oauth-protected-resource/mcp", func(w http.ResponseWriter, r *http.Request) {
 		if f.noPRM {
 			http.NotFound(w, r)
@@ -100,7 +119,7 @@ func newFakeAS(t *testing.T) *fakeAS {
 	})
 
 	as := http.NewServeMux()
-	f.as = httptest.NewServer(as)
+	f.as = serve(as)
 	as.HandleFunc("/.well-known/oauth-authorization-server", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(meta(f.as.URL))
@@ -176,7 +195,7 @@ func itoa(n int) string { return string(rune('0' + n)) }
 // browser follows the sign-in link the way a person's browser would.
 func browser(t *testing.T, signIn string) string {
 	t.Helper()
-	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	c := &http.Client{Transport: testTransport(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := c.Get(signIn)
 	if err != nil {
 		t.Fatal(err)
@@ -218,7 +237,7 @@ func connectAs(t *testing.T, m *Manager, f *fakeAS, o *config.OAuth) (*mcp.Clien
 	if err != nil {
 		t.Fatal(err)
 	}
-	tr := &mcp.StreamableClientTransport{Endpoint: f.rs.URL + "/mcp", OAuthHandler: h, MaxRetries: -1}
+	tr := &mcp.StreamableClientTransport{Endpoint: f.rs.URL + "/mcp", OAuthHandler: h, MaxRetries: -1, HTTPClient: &http.Client{Transport: testTransport()}}
 	return mcp.NewClient(&mcp.Implementation{Name: "t", Version: "1"}, nil).Connect(ctx, tr, nil)
 }
 
@@ -304,7 +323,7 @@ func TestSignInRefreshAndReauth(t *testing.T) {
 // follow is browser without the success check: it returns the callback's status and page.
 func follow(t *testing.T, signIn string) (int, string) {
 	t.Helper()
-	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	c := &http.Client{Transport: testTransport(), CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := c.Get(signIn)
 	if err != nil {
 		t.Fatal(err)
@@ -467,4 +486,77 @@ func writeRecord(t *testing.T, path string, rec record) {
 	if err := os.WriteFile(path, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// privateAddr is an RFC 1918 address of this machine, the kind the SDK refuses to dial
+// for OAuth discovery.
+func privateAddr(t *testing.T) string {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Skip(err)
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil && n.IP.IsPrivate() {
+			return n.IP.String()
+		}
+	}
+	t.Skip("no private IPv4 address on this machine")
+	return ""
+}
+
+// TestPrivateNetworkRefused: an authorization server on a private address is refused by
+// the SDK unless the connector opts in, and the refusal names the option. (Opting in can't
+// be shown end to end here: the SDK also refuses metadata URLs that are private IP
+// literals, whatever the transport, and test servers have no host name. TestPrivateClient
+// covers what the opt-in changes.)
+func TestPrivateNetworkRefused(t *testing.T) {
+	f := newFakeASAt(t, privateAddr(t))
+	f.dcr, f.clientID = true, ""
+	m := newManager(t, t.TempDir())
+	m.o.Client = &http.Client{Timeout: 30 * time.Second, Transport: testTransport()}
+	m.private = privateClient(m.o.Client)
+
+	_, err := connectAs(t, m, f, &config.OAuth{})
+	var sr *SignInRequired
+	if err == nil || errors.As(err, &sr) || !strings.Contains(err.Error(), "private_network: true") {
+		t.Fatalf("want a refusal naming private_network, got %v", err)
+	}
+	if f.registrations != 0 {
+		t.Fatal("registered with a refused server")
+	}
+	// Already opted in: no hint pointing at the option that's set.
+	_, err = connectAs(t, m, f, &config.OAuth{PrivateNetwork: true})
+	if err == nil || strings.Contains(err.Error(), "private_network: true") {
+		t.Fatalf("want a refusal without the hint, got %v", err)
+	}
+}
+
+func TestPrivateClient(t *testing.T) {
+	m := New(Options{})
+	if m.httpClient(&config.OAuth{}) != m.o.Client || m.httpClient(nil) != m.o.Client {
+		t.Error("connectors without private_network must keep the guarded client")
+	}
+	tr, ok := m.httpClient(&config.OAuth{PrivateNetwork: true}).Transport.(*http.Transport)
+	if !ok || tr.DialContext == nil {
+		t.Fatal("private_network client must dial for itself, or the SDK keeps its address checks")
+	}
+	if m.private.Timeout != m.o.Client.Timeout {
+		t.Error("private client lost the timeout")
+	}
+	custom := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("x") })}
+	if privateClient(custom) != custom {
+		t.Error("a custom transport already skips the checks and must be kept")
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// testTransport trusts httptest's certificate, which names loopback only, so a server on a
+// private address fails verification otherwise. DialContext stays unset: the SDK's checks
+// still apply to it.
+func testTransport() *http.Transport {
+	return &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // test servers only
 }
