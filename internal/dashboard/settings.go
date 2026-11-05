@@ -236,6 +236,9 @@ func (d *Dashboard) listAgents(w http.ResponseWriter, _ *http.Request) {
 	for _, name := range slices.Sorted(maps.Keys(cfg.Agents)) {
 		a := cfg.Agents[name]
 		v := agentView{Name: name, Def: agentForm{Role: a.Role}, Visible: pol.VisibleConnectors(name), Tokens: []tokenView{}}
+		if v.Visible == nil {
+			v.Visible = []string{} // a fresh config has no connectors; the page reads .length
+		}
 		v.Def.Match.Process = a.Match.Process
 		for _, p := range a.Match.From {
 			v.Def.Match.From = append(v.Def.Match.From, p.String())
