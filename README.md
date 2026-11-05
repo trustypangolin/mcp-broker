@@ -42,8 +42,27 @@ Private-network and WSL firewall rules, then listens on all interfaces), **Start
 Windows**, reload, restart and the log folders. Edits to `broker.yaml` in any editor apply
 on save.
 
-Already have servers set up in Claude Desktop, Claude Code or VS Code? `mcp-broker import`
-shows what it would bring over (secrets go to `secrets\<name>.env`, never `broker.yaml`;
+Already have servers set up in other clients? **Connectors → Import…** on the dashboard
+takes client configs: upload or paste `.mcp.json`, `claude_desktop_config.json`,
+`~/.claude.json` (including each project's servers), VS Code `mcp.json` or `settings.json`,
+Codex `config.toml`, or Cursor, Gemini CLI and Windsurf configs. You can also tick **scan
+this computer**. The preview sorts every server into one of four groups:
+
+- **already here:** the same command and arguments or URL, with no env or header the
+  broker's connector doesn't already have. These are left alone.
+- **variant:** the same server with a different env value, header or option value (for
+  example `--profile prod` next to an existing `--profile dev`). It's imported under a name
+  taken from the difference (`aws-prod`) and put in the same group as the original.
+- **new:** imported with suggested tags (so the default roles pick it up), group and name.
+  A name that a different connector already has gets the project or client name added.
+- **skipped:** SSE servers and the broker's own shim. Servers the client has disabled are
+  listed but unticked.
+
+Edit the name, tags or group of any row, then click **Import selected**. Secret values stay
+on the broker: the preview shows only their names, and they're written to
+`secrets\<name>.env`.
+
+`mcp-broker import` does the same from the command line. It shows what it would bring over (secrets go to `secrets\<name>.env`, never `broker.yaml`;
 Windows location variables such as `${LOCALAPPDATA}` are written in as plain paths;
 `npx mcp-remote` bridges become direct HTTP connectors). Use `--from PATH` to read any
 other file with an `mcpServers` block. Add `--apply` to import, and

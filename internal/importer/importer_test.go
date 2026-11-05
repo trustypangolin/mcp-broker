@@ -166,8 +166,12 @@ func TestPlanConflictAndOverwrite(t *testing.T) {
 	cn := f.cfg.Connectors["excel-live"]
 	cn.Args = []string{"other"}
 	f.cfg.Connectors["excel-live"] = cn
-	if it := f.plan(t, Options{})["excel-live"]; it.Skip == "" {
+	// Without --overwrite the different server is imported under another name.
+	if _, ok := f.plan(t, Options{})["excel-live"]; ok {
 		t.Fatal("a different existing connector must not be replaced without --overwrite")
+	}
+	if it := f.plan(t, Options{})["excel-live-claude-desktop"]; !it.Imported() || !strings.Contains(strings.Join(it.Notes, " "), "renamed") {
+		t.Fatalf("renamed import: %+v", it)
 	}
 	if it := f.plan(t, Options{Overwrite: true})["excel-live"]; !it.Imported() {
 		t.Fatalf("overwrite: %+v", it)

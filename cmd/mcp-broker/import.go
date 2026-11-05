@@ -16,8 +16,11 @@ import (
 
 const importUsage = `usage: mcp-broker import [--from PATH]... [--apply] [--switch] [--overwrite] [--tag NAME=T1,T2]...
 
-Reads MCP servers from client configs (by default Claude Desktop, Claude Code's
-~/.claude.json and VS Code's user mcp.json) and shows what importing them would do.
+Reads MCP servers from client configs and shows what importing them would do. By default
+it reads Claude Desktop, Claude Code's ~/.claude.json (and its projects' .mcp.json files),
+VS Code, Codex, Cursor, Gemini CLI and Windsurf. Servers already in broker.yaml are left
+alone; the same server with other env or option values is imported as a variant in the
+same group.
   --apply      add them to broker.yaml; secrets go to secrets\<name>.env next to it
   --switch     then point each client at the broker (original kept as .bak-<time>);
                for Claude Code, prints the claude mcp commands to run instead
@@ -56,7 +59,7 @@ func cmdImport(args []string, stdout, stderr io.Writer) error {
 		sources = append(sources, importer.SourceFor(p))
 	}
 	if len(from) == 0 {
-		sources = importer.DefaultSources()
+		sources = importer.ScanSources()
 	}
 	if len(sources) == 0 {
 		return fmt.Errorf("no client configs found; name one with --from")
@@ -133,6 +136,12 @@ func printPlan(w io.Writer, sources []importer.Source, items []importer.Item) {
 				what = what[:69] + "…"
 			}
 			fmt.Fprintf(w, "  +  %-18s %s\n", it.Name, what)
+			if it.Server.Scope != "" {
+				fmt.Fprintf(w, "       project: %s\n", it.Server.Scope)
+			}
+			if it.VariantOf != "" {
+				fmt.Fprintf(w, "       variant of %s, group %q: %s\n", it.VariantOf, it.Entry.Group, strings.Join(it.Diffs, "; "))
+			}
 			if len(it.Entry.Tags) > 0 {
 				fmt.Fprintf(w, "       tags: %s\n", strings.Join(it.Entry.Tags, ", "))
 			}

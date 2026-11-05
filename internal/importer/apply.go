@@ -76,6 +76,17 @@ func Apply(cfg *config.Config, items []Item) (n int, err error) {
 	if n == 0 {
 		return 0, nil
 	}
+	// Variants of an ungrouped connector put that connector in their group too.
+	for _, it := range items {
+		if !it.Imported() || !it.GroupExisting || it.Entry.Group == "" {
+			continue
+		}
+		if cur, ok := cfg.Connectors[it.VariantOf]; ok && cur.Group == "" {
+			if out, err = config.SetFields(out, "connectors", []string{it.VariantOf}, "group", it.Entry.Group); err != nil {
+				return 0, fmt.Errorf("grouping %s: %w", it.VariantOf, err)
+			}
+		}
+	}
 	if err = config.WriteFile(cfg.Path, out, config.Hash(data)); err != nil {
 		return 0, err
 	}
@@ -129,6 +140,9 @@ func Switch(src Source, items []Item, shimExe string) (Switched, error) {
 		return res, nil
 	}
 
+	if (src.Client != ClaudeDesktop && src.Client != ClaudeCode && src.Client != VSCode) || (src.Key != "mcpServers" && src.Key != "servers") {
+		return res, fmt.Errorf("switching %s clients isn't supported yet; replace its servers with the broker by hand (mcp-broker client-config %s)", src.Client, src.Client)
+	}
 	data, err := os.ReadFile(src.Path)
 	if err != nil {
 		return res, err

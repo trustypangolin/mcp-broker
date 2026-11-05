@@ -384,6 +384,7 @@ pages.connectors = async (main) => {
       h("div", {}, h("div", {}, "MCP endpoint ", h("code", {}, me.url)), h("div", { class: "muted" }, "Config ", h("code", {}, me.config), " · up since ", new Date(me.started).toLocaleString())),
       h("div", { class: "row" },
         h("button", { onclick: (ev) => run(ev.target, async () => { toast(reloadSummary(await api("POST", "reload"))); route(); }) }, "Reload config"),
+        h("button", { onclick: () => importDialog() }, "Import…"),
         h("button", { onclick: () => awsProfiles() }, "AWS profiles…"),
         h("button", { class: "primary", onclick: () => editConnector(null, {}, data.classes, items) }, "Add connector"))));
   const items = data.connectors.map((c) => ({ ...c, group: c.def.group || "" }));
@@ -538,6 +539,127 @@ function editConnector(name, def, classes, items, opts = {}) {
 
 // awsProfiles attaches profiles from ~/.aws/config: each becomes its own connector running
 // AWS's signing proxy as that profile.
+// importDialog brings servers over from client configs: uploaded or pasted files
+// (.mcp.json, claude_desktop_config.json, ~/.claude.json, VS Code mcp.json, Codex
+// config.toml, Cursor, Gemini, Windsurf) and, optionally, the configs on this computer.
+// The broker plans it: servers already here are left alone, and the same server with
+// other settings becomes a variant in the same group.
+function importDialog() {
+  const files = [];
+  const fileInput = h("input", { type: "file", multiple: true, accept: ".json,.jsonc,.toml,application/json" });
+  const fileList = h("div", { class: "hint" });
+  const paste = h("textarea", { rows: 6, placeholder: '{"mcpServers": {...}}  or a Codex [mcp_servers.x] block' });
+  const scan = h("input", { type: "checkbox" });
+  const showFiles = () => fill(fileList, files.length ? ["Files: ", files.map((f) => h("span", { class: "pill" }, f.name))] : "");
+  fileInput.addEventListener("change", async () => {
+    for (const f of fileInput.files) files.push({ name: f.name, content: await f.text() });
+    fileInput.value = "";
+    showFiles();
+  });
+  const body = h("div", {});
+  let request = null; // what the plan was made from, reused for updates and the import
+  let plan = null;
+  const rows = new Map(); // item id -> inputs
+
+  const choices = () => {
+    const out = {};
+    for (const [id, r] of rows) {
+      out[id] = { skip: !r.include.checked, name: r.name.value.trim(), tags: r.tags.value.split(",").map((t) => t.trim()).filter(Boolean), group: r.group.value.trim() };
+    }
+    return out;
+  };
+  const statusPill = { new: ["new", "on"], variant: ["variant", "approve"], existing: ["already here", ""], skip: ["skipped", "deny"] };
+
+  const showPlan = () => {
+    rows.clear();
+    const sources = h("div", { class: "hint" }, plan.sources.map((s) => h("div", { class: s.error ? "bad" : "" },
+      h("code", {}, s.name), " · ", s.client, " · ", s.error ? s.error : s.servers + " server(s)")));
+    const order = { variant: 0, new: 1, existing: 2, skip: 3 };
+    const items = [...plan.items].sort((a, b) => order[a.status] - order[b.status]);
+    const cards = items.map((it) => {
+      const [label, cls] = statusPill[it.status];
+      const head = h("div", { class: "row" }, h("span", { class: "pill " + cls }, label), h("b", {}, it.server),
+        h("span", { class: "muted" }, " from ", h("code", {}, it.source.split(/[\\/]/).pop()), it.scope ? " · project " + it.scope : ""));
+      const what = h("pre", {}, it.entry.url || [it.entry.command, ...(it.entry.args || [])].join(" "));
+      const extra = [
+        it.variant_of && h("div", {}, "Same server as ", h("b", {}, it.variant_of), " with other settings:",
+          h("ul", {}, (it.diffs || []).map((d) => h("li", {}, d)))),
+        it.status === "existing" && h("div", { class: "muted" }, "Already here as ", h("b", {}, it.name), ". Nothing to import.",
+          (it.diffs || []).length ? " (" + it.diffs.join("; ") + ")" : ""),
+        it.skip && h("div", { class: "warn" }, it.skip),
+        (it.also || []).length > 0 && h("div", { class: "hint" }, "Also in: ", it.also.map((p) => h("code", {}, p.split(/[\\/]/).pop())).flatMap((x) => [x, " "])),
+        (it.notes || []).map((n) => h("div", { class: "warn" }, n)),
+      ];
+      if (it.status !== "new" && it.status !== "variant" && !(it.status === "skip" && it.skip === "left out")) {
+        return h("div", { class: "card import-item muted-card" }, head, what, extra);
+      }
+      const r = {
+        include: h("input", { type: "checkbox", checked: it.skip !== "left out" && !it.disabled }),
+        name: h("input", { value: it.name, size: 24 }),
+        tags: h("input", { value: (it.entry.tags || []).join(", "), placeholder: "none", size: 18 }),
+        group: h("input", { value: it.entry.group || "", placeholder: "none", size: 18 }),
+      };
+      rows.set(it.id, r);
+      return h("div", { class: "card import-item" },
+        h("div", { class: "row spread" }, head, h("label", { class: "checks" }, r.include, "import")),
+        what,
+        h("div", { class: "row import-fields" },
+          h("label", {}, "Name ", r.name), h("label", {}, "Tags ", r.tags), h("label", {}, "Group ", r.group)),
+        it.groups_existing && h("div", { class: "hint" }, it.variant_of + " has no group yet; importing this puts it in the same group."),
+        (it.secrets || []).length > 0 && h("div", { class: "hint" }, "Secrets to the env file, not broker.yaml: ", it.secrets.map((s) => h("code", {}, s)).flatMap((x) => [x, " "])),
+        it.entry.env && Object.keys(it.entry.env).length > 0 && h("div", { class: "hint" }, "Env: ", Object.entries(it.entry.env).map(([k, v]) => h("code", {}, k + "=" + v)).flatMap((x) => [x, " "])),
+        h("div", { class: "hint" }, "Visible to: ", it.visible.length ? it.visible.map((a) => h("span", { class: "pill" }, a)) : "no agent (add a tag a role selects, or edit roles)"),
+        extra);
+    });
+    const counts = plan.items.reduce((m, it) => ((m[it.status] = (m[it.status] || 0) + 1), m), {});
+    fill(body,
+      sources,
+      h("p", {}, ["new", "variant", "existing", "skip"].filter((s) => counts[s]).map((s) => h("span", { class: "pill " + statusPill[s][1] }, counts[s] + " " + statusPill[s][0]))),
+      cards.length ? cards : h("div", { class: "empty" }, "No servers found."));
+  };
+
+  const preview = async (btn) => run(btn, async () => {
+    if (!request) {
+      const all = [...files];
+      if (paste.value.trim()) all.push({ name: "pasted", content: paste.value });
+      request = { files: all, scan: scan.checked };
+    }
+    plan = await api("POST", "import/plan", { ...request, choices: plan ? choices() : {} });
+    showPlan();
+    step2();
+  });
+
+  fill(body,
+    h("p", { class: "muted" }, "Add client configs: ", h("code", {}, ".mcp.json"), ", ", h("code", {}, "claude_desktop_config.json"), ", ",
+      h("code", {}, "~/.claude.json"), " (with its projects), VS Code ", h("code", {}, "mcp.json"), ", Codex ", h("code", {}, "config.toml"),
+      ", Cursor, Gemini or Windsurf. Servers already here are left alone; the same server with different env or options is offered as a variant in the same group. Secrets go to env files, never broker.yaml."),
+    h("label", {}, "Files"), fileInput, fileList,
+    h("label", {}, "Or paste"), paste,
+    h("label", { class: "checks", style: "margin-top:10px" }, scan, "Also scan this computer (Claude, VS Code, Codex, Cursor, Gemini, Windsurf, and Claude Code's projects)"));
+
+  let actions;
+  const d = dialog("Import servers", body, (close) => {
+    actions = h("div", { class: "row" },
+      h("button", { onclick: close }, "Cancel"),
+      h("button", { class: "primary", onclick: (ev) => preview(ev.target) }, "Preview"));
+    return actions;
+  });
+  d.classList.add("wide");
+
+  const step2 = () => fill(actions,
+    h("button", { onclick: () => d.close() }, "Cancel"),
+    h("button", { onclick: () => { request = null; plan = null; d.close(); importDialog(); } }, "Start over"),
+    h("button", { onclick: (ev) => preview(ev.target) }, "Update preview"),
+    h("button", { class: "primary", onclick: (ev) => run(ev.target, async () => {
+      const n = [...rows.values()].filter((r) => r.include.checked).length;
+      if (!n) throw new Error("Nothing selected to import.");
+      const res = await api("POST", "import/apply", { ...request, choices: choices() });
+      d.close();
+      toast("Imported " + (res.added || []).join(", ") + ". " + reloadSummary(res.reload));
+      route();
+    }) }, "Import selected"));
+}
+
 async function awsProfiles() {
   const data = await api("GET", "aws");
   const kindNote = { sso: "SSO: run aws sso login when the session lapses", process: "credential process (certificates): no sign-in", "assume-role": "assumes a role", keys: "static keys", unknown: "" };

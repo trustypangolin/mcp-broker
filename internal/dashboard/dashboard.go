@@ -217,6 +217,8 @@ func (d *Dashboard) Mount(mux *http.ServeMux) {
 	mux.Handle("POST /ui/api/connectors/{key}/unload", d.api(admin, d.unload))
 	mux.Handle("POST /ui/api/connectors/{name}/oauth/{action}", d.api(admin, d.oauthAction))
 	mux.Handle("POST /ui/api/groups", d.api(admin, d.setGroup))
+	mux.Handle("POST /ui/api/import/plan", d.api(admin, d.importPlan))
+	mux.Handle("POST /ui/api/import/apply", d.api(admin, d.importApply))
 	mux.Handle("GET /ui/api/aws", d.api(admin, d.listAWS))
 	mux.Handle("POST /ui/api/aws/{profile}/attach", d.api(admin, d.attachAWS))
 	mux.Handle("GET /ui/api/agents", d.api(admin, d.listAgents))
