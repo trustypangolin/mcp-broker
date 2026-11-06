@@ -27,7 +27,7 @@ for target in windows/amd64 windows/arm64 linux/amd64 linux/arm64 darwin/amd64 d
     GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$ldflags -H windowsgui" -o "$dir/mcp-broker-tray.exe" ./cmd/mcp-broker-tray
     mkdir -p "$dir/scripts" && cp scripts/firewall.ps1 "$dir/scripts/"
   fi
-  cp README.md "$dir/"
+  cp README.md LICENSE "$dir/"
   cp docs/*.md "$dir/docs/"
   cp examples/broker.yaml "$dir/examples/"
   if [ "$os" = windows ]; then
