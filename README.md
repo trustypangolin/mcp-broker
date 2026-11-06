@@ -9,7 +9,8 @@ settings.
 - Spec: [docs/SPEC.md](docs/SPEC.md)
 - Permissions, agents and roles: [docs/PERMISSIONS.md](docs/PERMISSIONS.md)
 
-Status: early development.
+Status: stable since v1.0.0. Website: https://mcpbroker.aimodel.au. License: Business Source
+License 1.1, free for use on a single machine (see [License](#license)).
 
 ## Quick start (Windows)
 
@@ -322,3 +323,18 @@ bash scripts/package.sh v0.1.0   # release archives into ./release
 ```
 
 Pushing a `v*` tag runs the same script in GitHub Actions and publishes a release.
+
+## License
+
+mcp-broker is source-available under the [Business Source License 1.1](LICENSE).
+
+- **Free:** production use on a single machine, including WSL, virtual machines and
+  containers on that machine, as long as the broker only accepts connections from that
+  machine. You can install it on as many machines as you like, each on its own.
+- **Commercial license needed:** when the broker accepts connections from other machines,
+  such as office PCs, laptops or phones over a LAN, VPN or the internet. See
+  [pricing](https://mcpbroker.aimodel.au/pricing) or email contact@aimodel.au.
+- **Becomes open source:** each version converts to the Apache License 2.0 four years after
+  it is published.
+
+Copying, modifying and non-production use are always allowed.
