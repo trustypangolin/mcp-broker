@@ -48,10 +48,11 @@ To use a connector, an agent calls:
 
 1. `list_connectors`;
 2. `load_connector`, which by default returns one line per tool: name, first sentence,
-   class, and whether it needs approval;
+   required argument names, class, and whether it needs approval;
 3. `describe_tool` for the tool it wants, to get that tool's full description and input
    schema;
-4. `call_tool`.
+4. `call_tool`. If a connector rejects the arguments as not matching its schema, the
+   broker adds a hint to call `describe_tool`.
 
 A 120-tool server costs a few thousand tokens to list this way, instead of about 20K with
 every schema. `load_connector` with `detail: "full"` still returns everything at once.

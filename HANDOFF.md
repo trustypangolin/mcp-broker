@@ -23,7 +23,9 @@ stdio shim (`mcp-broker connect --agent NAME`) to Streamable HTTP on `:8765/mcp`
   gets its own MCP server holding only the meta-tools its role can use (no profile tools
   without a usable profile, no `approval_status` if approvals can only be answered in its own
   client). A reload adds or removes tools and sends `tools/list_changed`. `load_connector`
-  returns a compact one-line-per-tool summary (`detail: full` for the old output);
+  returns a compact one-line-per-tool summary with each tool's required argument names
+  (`detail: full` for the old output); `call_tool` adds a `describe_tool` hint when a
+  downstream error reads as a schema mismatch;
   `describe_tool` gives one tool's description and schema under `call_tool`'s rules. Test
   budgets cap the meta-tool context (3.1 KB all, 2.0 KB without profiles). Downstream MCP
   servers start lazily.
