@@ -400,17 +400,39 @@ func (g *Gateway) loadConnector(ctx context.Context, req *mcp.CallToolRequest) (
 		if dec.Action == config.Deny {
 			continue
 		}
-		out = append(out, toolSummary{Name: t.Name, Summary: summarize(t.Description), Class: string(dec.Class), Approval: dec.Action == config.Approve})
+		out = append(out, toolSummary{Name: t.Name, Summary: summarize(t.Description), Args: requiredArgs(t.InputSchema), Class: string(dec.Class), Approval: dec.Action == config.Approve})
 	}
 	return summaryResult(a.Name, out), nil
 }
 
-// toolSummary is one line of load_connector's summary: enough to pick a tool, not to call it.
+// toolSummary is one line of load_connector's summary: enough to pick a tool, and to name
+// its required arguments, which is where an agent skipping describe_tool most often guesses
+// wrong.
 type toolSummary struct {
-	Name     string `json:"name"`
-	Summary  string `json:"summary,omitempty"`
-	Class    string `json:"class"`
-	Approval bool   `json:"requires_approval,omitempty"`
+	Name     string   `json:"name"`
+	Summary  string   `json:"summary,omitempty"`
+	Args     []string `json:"args,omitempty"`
+	Class    string   `json:"class"`
+	Approval bool     `json:"requires_approval,omitempty"`
+}
+
+// requiredArgs is the required property names of a tool's input schema, in the schema's
+// order. The schema arrives as whatever the SDK decoded, so it is read back through JSON.
+func requiredArgs(schema any) []string {
+	if schema == nil {
+		return nil
+	}
+	b, err := json.Marshal(schema)
+	if err != nil {
+		return nil
+	}
+	var s struct {
+		Required []string `json:"required"`
+	}
+	if json.Unmarshal(b, &s) != nil {
+		return nil
+	}
+	return s.Required
 }
 
 // summaryMax caps a summary line's description.
@@ -435,7 +457,7 @@ func summarize(desc string) string {
 }
 
 // summaryNext tells the agent how to go on from a summary.
-const summaryNext = "Call describe_tool for a tool's input schema before calling it."
+const summaryNext = "args are the required arguments; call describe_tool for a tool's full input schema."
 
 // summaryResult renders a summary compactly, one tool per line: indentation would cost
 // the agent more than the content.
@@ -579,7 +601,11 @@ func (g *Gateway) callTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.
 	if err != nil {
 		ev.Error, ev.Outcome = g.red.String(err.Error()), audit.OutcomeFailed
 		g.write(ev)
-		return textResult(true, "%s/%s failed: %s", a.Connector, a.Tool, ev.Error), nil
+		msg := fmt.Sprintf("%s/%s failed: %s", a.Connector, a.Tool, ev.Error)
+		if schemaError(err.Error()) {
+			msg += " " + describeHint(a)
+		}
+		return textResult(true, "%s", msg), nil
 	}
 	ev.Outcome = audit.OutcomeRan
 	if res.IsError {
@@ -587,7 +613,29 @@ func (g *Gateway) callTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.
 		ev.Outcome, ev.Error = audit.OutcomeFailed, g.red.String(firstText(res, 300))
 	}
 	g.write(ev)
-	return g.truncate(g.redactResult(res)), nil
+	out := g.truncate(g.redactResult(res))
+	if res.IsError && schemaError(firstText(res, 2000)) {
+		out.Content = append(slices.Clone(out.Content), &mcp.TextContent{Text: describeHint(a)})
+	}
+	return out, nil
+}
+
+// schemaError reports whether a downstream failure reads as the arguments not matching the
+// tool's input schema, the failure describe_tool would have prevented.
+func schemaError(msg string) bool {
+	m := strings.ToLower(msg)
+	for _, s := range []string{"validat", "additionalproperties", "additional properties", "missing required", "required field",
+		"required property", "required argument", "required parameter", "invalid params", "invalid argument", "unexpected argument", "unknown argument"} {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// describeHint points an agent whose arguments were rejected at the tool's schema.
+func describeHint(a callArgs) string {
+	return fmt.Sprintf("(broker: the arguments may not match the tool's schema; describe_tool connector=%q tool=%q gives it.)", a.Connector, a.Tool)
 }
 
 // firstText is the start of a result's first text content, for the audit log.

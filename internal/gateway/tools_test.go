@@ -37,6 +37,38 @@ func TestSummarize(t *testing.T) {
 	}
 }
 
+func TestRequiredArgs(t *testing.T) {
+	for _, c := range []struct {
+		schema any
+		want   []string
+	}{
+		{nil, nil},
+		{map[string]any{"type": "object"}, nil},
+		{map[string]any{"type": "object", "required": []any{"code", "region"}}, []string{"code", "region"}},
+		{json.RawMessage(`{"type":"object","required":["code"]}`), []string{"code"}},
+		{map[string]any{"required": "not-a-list"}, nil},
+	} {
+		if got := requiredArgs(c.schema); !slices.Equal(got, c.want) {
+			t.Errorf("requiredArgs(%v) = %v, want %v", c.schema, got, c.want)
+		}
+	}
+}
+
+func TestSchemaError(t *testing.T) {
+	for msg, want := range map[string]bool{
+		"ValidationException - Parameter validation failed":                                   true,
+		"property 'script' is not defined and the schema does not allow additionalProperties": true,
+		"Missing required field(s): 'code'":                                                   true,
+		"calling \"tools/call\": invalid params":                                              true,
+		"authentication required":                                                             false,
+		"could not do x":                                                                      false,
+	} {
+		if got := schemaError(msg); got != want {
+			t.Errorf("schemaError(%q) = %v, want %v", msg, got, want)
+		}
+	}
+}
+
 func TestLoadConnectorSummaryAndDescribe(t *testing.T) {
 	h := newHarness(t, fakemcp.ModeCurrent, nil)
 	h.as("coder")
@@ -65,6 +97,21 @@ func TestLoadConnectorSummaryAndDescribe(t *testing.T) {
 	}
 	if n := strings.Count(out, "\n"); n != len(got.Tools)+1 {
 		t.Errorf("want one line per tool, got %d newlines:\n%s", n, out)
+	}
+	if a := byName["get_echo"].Args; !slices.Equal(a, []string{"text"}) {
+		t.Errorf("get_echo args = %v, want [text]", a)
+	}
+	if !strings.Contains(got.Next, "args") {
+		t.Errorf("next doesn't explain args: %q", got.Next)
+	}
+
+	// A call with the wrong argument name is pointed at describe_tool.
+	if out, isErr := h.call("call_tool", map[string]any{"connector": "fake", "tool": "get_echo", "arguments": map[string]any{"script": "x"}}); !isErr || !strings.Contains(out, "describe_tool") {
+		t.Errorf("call with a wrong argument = %v %s", isErr, out)
+	}
+	// An ordinary tool failure is not.
+	if out, isErr := h.call("call_tool", map[string]any{"connector": "fake", "tool": "get_failure", "arguments": map[string]any{"text": "x"}}); !isErr || strings.Contains(out, "describe_tool") {
+		t.Errorf("ordinary tool failure = %v %s", isErr, out)
 	}
 
 	out, isErr = h.call("describe_tool", map[string]any{"connector": "fake", "tool": "get_echo"})

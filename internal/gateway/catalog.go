@@ -72,7 +72,7 @@ func entryBytes(t *mcp.Tool) int {
 // summaryLineBytes is the size of a tool's line in load_connector's summary, the longest
 // class and requires_approval counted.
 func summaryLineBytes(t *mcp.Tool) int {
-	b, err := json.Marshal(toolSummary{Name: t.Name, Summary: summarize(t.Description), Class: "destructive", Approval: true})
+	b, err := json.Marshal(toolSummary{Name: t.Name, Summary: summarize(t.Description), Args: requiredArgs(t.InputSchema), Class: "destructive", Approval: true})
 	if err != nil {
 		return 0
 	}
