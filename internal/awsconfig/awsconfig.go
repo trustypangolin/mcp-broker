@@ -1,6 +1,7 @@
 // Package awsconfig lists the profiles in the AWS shared config files, so the dashboard
-// can attach them as connectors. It reads names, kinds and regions only: never keys,
-// tokens or credential_process command lines.
+// can attach them as connectors. It reads names, kinds, regions, account IDs and role
+// names only: never keys, tokens or credential_process command lines (from those it takes
+// only a --role-arn value that is exactly an IAM role ARN).
 package awsconfig
 
 import (
@@ -8,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -28,8 +30,46 @@ type Profile struct {
 	Name   string `json:"name"`
 	Kind   Kind   `json:"kind"`
 	Region string `json:"region,omitempty"`
+	// AccountID and Role are the account and IAM role the profile acts as, when the config
+	// says (sso_account_id / sso_role_name, role_arn, or a credential_process --role-arn).
+	AccountID string `json:"account_id,omitempty"`
+	Role      string `json:"role,omitempty"`
 	// Interactive is true when credentials can lapse and need a person to sign in again.
 	Interactive bool `json:"interactive"`
+}
+
+// roleARN matches an IAM role ARN and captures its account and role name (the last path
+// element).
+var roleARN = regexp.MustCompile(`^arn:aws[a-z-]*:iam::(\d{12}):role/(?:[\w+=,.@-]+/)*([\w+=,.@-]+)$`)
+
+// accountDigits matches an AWS account ID.
+var accountDigits = regexp.MustCompile(`^\d{12}$`)
+
+// parseRoleARN returns the account and role name in arn, or "" twice.
+func parseRoleARN(arn string) (account, role string) {
+	if m := roleARN.FindStringSubmatch(strings.Trim(arn, `"'`)); m != nil {
+		return m[1], m[2]
+	}
+	return "", ""
+}
+
+// processRoleARN finds the --role-arn argument of a credential_process command line (IAM
+// Roles Anywhere's aws_signing_helper) and returns it only if it is a role ARN. Nothing
+// else on the line is looked at, as it may name key files or carry secrets.
+func processRoleARN(cmd string) string {
+	f := strings.Fields(cmd)
+	for i, a := range f {
+		v, ok := strings.CutPrefix(a, "--role-arn=")
+		if !ok && a == "--role-arn" && i+1 < len(f) {
+			v, ok = f[i+1], true
+		}
+		if ok {
+			if acct, _ := parseRoleARN(v); acct != "" {
+				return strings.Trim(v, `"'`)
+			}
+		}
+	}
+	return ""
 }
 
 // Paths returns the config and credentials files, honouring AWS_CONFIG_FILE and
@@ -140,6 +180,17 @@ func Profiles(cfg, cred map[string]map[string]string) []Profile {
 			}
 		case keys[name]:
 			p.Kind = Keys
+		}
+		switch {
+		case kv["sso_account_id"] != "":
+			if accountDigits.MatchString(kv["sso_account_id"]) {
+				p.AccountID = kv["sso_account_id"]
+			}
+			p.Role = kv["sso_role_name"]
+		case kv["role_arn"] != "":
+			p.AccountID, p.Role = parseRoleARN(kv["role_arn"])
+		case kv["credential_process"] != "":
+			p.AccountID, p.Role = parseRoleARN(processRoleARN(kv["credential_process"]))
 		}
 		out = append(out, p)
 	}

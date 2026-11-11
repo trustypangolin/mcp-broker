@@ -145,7 +145,8 @@ function foldAll(root, v) {
 
 // grouped lays items out under collapsible group headings, named groups first, then the
 // ungrouped ones. section is "connectors" or "profiles"; card(item) renders one item.
-function grouped(section, items, nameOf, card, admin, headExtra) {
+// descs (connectors only) maps group names to {description}, which agents are shown.
+function grouped(section, items, nameOf, card, admin, headExtra, descs) {
   const groups = new Map();
   for (const it of items) {
     const g = it.group || "";
@@ -157,22 +158,41 @@ function grouped(section, items, nameOf, card, admin, headExtra) {
   if (names.length === 1 && names[0] === "") return groups.get("").map(card);
   return names.map((g) => {
     const members = groups.get(g);
+    const desc = descs && g ? (descs[g] || {}).description || "" : "";
     const head = h("div", { class: "row grow" },
       h("span", { class: "group-name" }, g || "Ungrouped"),
       h("span", { class: "muted" }, String(members.length)),
+      desc && h("span", { class: "muted head-desc" }, desc),
       headExtra && headExtra(members),
       h("span", { class: "grow" }),
+      admin && descs && g && h("button", { class: "link", title: "What list_connectors tells agents about this group", onclick: () => describeGroup(g, desc) }, desc ? "Edit description" : "Describe"),
       admin && g && h("button", { class: "link", onclick: () => groupDialog(section, items, nameOf, { rename: g }) }, "Rename"),
-      admin && g && h("button", { class: "link", onclick: (ev) => setGroup(ev.target, section, members.map(nameOf), "") }, "Ungroup"));
-    return fold(section + ":group:" + g, false, "group", head, members.map(card));
+      admin && g && h("button", { class: "link", onclick: (ev) => setGroup(ev.target, section, members.map(nameOf), "", g) }, "Ungroup"));
+    return fold(section + ":group:" + g, false, "group", head, [desc && h("div", { class: "hint group-desc" }, "Agents read: ", desc), ...members.map(card)]);
   });
 }
 
-async function setGroup(btn, section, names, group) {
+async function setGroup(btn, section, names, group, from) {
   await run(btn, async () => {
-    toast(reloadSummary(await api("POST", "groups", { section, names, group })));
+    toast(reloadSummary(await api("POST", "groups", { section, names, group, from })));
     route();
   });
+}
+
+// describeGroup edits what agents are told about a connector group.
+function describeGroup(group, current) {
+  const input = h("textarea", { value: current, placeholder: "One connector per AWS account; pick by account number or profile name." });
+  dialog("Describe group " + group,
+    h("div", {}, field("Description", input, "Shown to agents above this group's connectors in list_connectors. Say what the connectors have in common and how to tell them apart. Empty removes it.")),
+    (close) => [
+      h("button", { onclick: close }, "Cancel"),
+      h("button", { class: "primary", onclick: (ev) => run(ev.target, async () => {
+        toast(reloadSummary(await api("PUT", "groups/" + encodeURIComponent(group), { description: input.value.trim() })));
+        close();
+        route();
+      }) }, "Save and apply"),
+    ]);
+  input.focus();
 }
 
 // groupList is a datalist of the groups in use, for group inputs.
@@ -205,7 +225,7 @@ function groupDialog(section, items, nameOf, opts = {}) {
         else names = picks.map((l) => l.querySelector("input")).filter((c) => c.checked).map((c) => c.value);
         if (!opts.move && !g) throw new Error("Give the group a name.");
         if (!names.length) throw new Error("Pick at least one member.");
-        toast(reloadSummary(await api("POST", "groups", { section, names, group: g })));
+        toast(reloadSummary(await api("POST", "groups", { section, names, group: g, from: opts.rename })));
         close();
         route();
       }) }, "Save and apply"),
@@ -575,8 +595,13 @@ pages.connectors = async (main) => {
         auth && h("span", { class: "pill " + (auth === "signed in" ? "on" : "approve") }, auth),
         (def.tags || []).map((t) => h("span", { class: "pill" }, "tag:" + t)),
         bad && h("span", { class: "pill deny" }, "error"),
-        def.description && h("span", { class: "muted head-desc" }, def.description)), [
-      def.description && h("div", {}, def.description),
+        c.needs_description && h("span", { class: "pill approve", title: "Agents see a description made up from the server's tools" }, "no description"),
+        c.agent_description && h("span", { class: "muted head-desc" }, c.agent_description)), [
+      c.needs_description
+        ? h("div", { class: "hint" }, "No description, so agents see one made up from the server: ", h("i", {}, c.agent_description), " ",
+          h("button", { class: "link", onclick: () => editConnector(c.name, def, data.classes, items, { agentDescription: c.agent_description }) }, "Write one"))
+        : h("div", {}, def.description),
+      (def.aliases || []).length > 0 && h("div", { class: "hint" }, "Aliases: ", def.aliases.map((a) => h("span", { class: "pill" }, a))),
       h("pre", {}, def.url || [def.command, ...(def.args || [])].join(" ")),
       loaded.map((i) => h("div", { class: "row muted" },
         i.key, " · ", i.tools + " tools", i.pid ? " · pid " + i.pid : "",
@@ -593,12 +618,12 @@ pages.connectors = async (main) => {
           toast("Signed out of " + c.name + ".");
           route();
         }) }, "Sign out"),
-        h("button", { onclick: () => editConnector(c.name, def, data.classes, items) }, "Edit"),
+        h("button", { onclick: () => editConnector(c.name, def, data.classes, items, { agentDescription: c.needs_description ? c.agent_description : "" }) }, "Edit"),
         h("button", { onclick: () => editConnector(null, def, data.classes, items, { from: c.name, awsProfile: c.aws_profile }) }, "Duplicate"),
         h("button", { onclick: () => groupDialog("connectors", items, nameOf, { move: c.name }) }, "Group…"),
         h("button", { class: "danger", onclick: (ev) => removeConnector(ev.target, c.name) }, "Remove"))]);
   };
-  const cards = grouped("connectors", items, nameOf, card, true);
+  const cards = grouped("connectors", items, nameOf, card, true, null, data.groups || {});
   const tools = cards.length > 0 && h("div", { class: "row", style: "justify-content:flex-end;margin-bottom:8px" },
     h("button", { class: "link", onclick: () => foldAll(main, false) }, "Expand all"),
     h("button", { class: "link", onclick: () => foldAll(main, true) }, "Collapse all"),
@@ -619,7 +644,10 @@ function editConnector(name, def, classes, items, opts = {}) {
   };
   const f = {
     name: h("input", { value: name || (opts.from ? unique(opts.from + "-copy") : ""), disabled: !!name, placeholder: "excel-live" }),
-    description: h("input", { value: def.description || "" }),
+    // An import's old "Imported from …" placeholder is dropped, so saving writes a real one.
+    description: h("input", { value: (def.description || "").startsWith("Imported from ") ? "" : def.description || "",
+      placeholder: opts.agentDescription || "what it is for, e.g. \"Strapi CMS for the t-shirt shop\"" }),
+    aliases: h("input", { value: (def.aliases || []).join(", "), placeholder: "BBAD, 123456789012, body corporate" }),
     tags: h("input", { value: (def.tags || []).join(", "), placeholder: "office, files" }),
     group: h("input", { value: def.group || "", list: dl.id, placeholder: "none" }),
     kind: h("select", {}, h("option", { value: "local", selected: !remote }, "Local: start a command (stdio)"), h("option", { value: "remote", selected: remote }, "Remote: Streamable HTTP URL")),
@@ -676,8 +704,10 @@ function editConnector(name, def, classes, items, opts = {}) {
       opts.from && h("p", { class: "hint" }, "A copy of ", h("b", {}, opts.from), ". Change what makes it a different server: an argument, an env value or the URL. An exact copy of an existing server is refused."),
       awsPick && field("AWS profile", awsPick, "Profiles already attached are greyed out."),
       h("div", { class: "grid2" }, field("Name", f.name), field("Tags", f.tags, "Roles can select connectors by tag:<name>.")),
-      dl.el, field("Group", f.group, "A heading on this page only; it doesn't change what agents see."),
-      field("Description", f.description, "Shown to agents in list_connectors."),
+      dl.el, field("Group", f.group, "list_connectors lists it under this group (with the group's description). It doesn't change policy."),
+      field("Description", f.description, "Shown to agents in list_connectors: say what it reaches and what it's for, so an agent picks it from the user's words." +
+        (opts.agentDescription ? " Empty, agents see the made-up one shown." : "")),
+      field("Aliases", f.aliases, "Comma-separated other names people use for it (an account number, a site's name). Shown to agents; no effect on policy."),
       field("Kind", f.kind), local, rem,
       field("Environment", f.env, "NAME=value, one per line. Put secrets in an env file instead: broker.yaml holds no secrets."),
       field("Env file", f.env_file, "KEY=value lines passed to the server; values are redacted everywhere."),
@@ -692,6 +722,7 @@ function editConnector(name, def, classes, items, opts = {}) {
         const body = {
           description: f.description.value.trim() || undefined,
           group: f.group.value.trim() || undefined,
+          aliases: f.aliases.value.split(",").map((t) => t.trim()).filter(Boolean),
           tags: f.tags.value.split(",").map((t) => t.trim()).filter(Boolean),
           command: isLocal ? f.command.value.trim() : undefined,
           args: isLocal ? lines(f.args.value) : undefined,
@@ -738,7 +769,7 @@ function importDialog() {
   const choices = () => {
     const out = {};
     for (const [id, r] of rows) {
-      out[id] = { skip: !r.include.checked, name: r.name.value.trim(), tags: r.tags.value.split(",").map((t) => t.trim()).filter(Boolean), group: r.group.value.trim() };
+      out[id] = { skip: !r.include.checked, name: r.name.value.trim(), tags: r.tags.value.split(",").map((t) => t.trim()).filter(Boolean), group: r.group.value.trim(), description: r.description.value.trim() };
     }
     return out;
   };
@@ -772,6 +803,7 @@ function importDialog() {
         name: h("input", { value: it.name, size: 24 }),
         tags: h("input", { value: (it.entry.tags || []).join(", "), placeholder: "none", size: 18 }),
         group: h("input", { value: it.entry.group || "", placeholder: "none", size: 18 }),
+        description: h("input", { value: it.entry.description || "", placeholder: "what it is for, e.g. \"Strapi CMS for the t-shirt shop\"" }),
       };
       rows.set(it.id, r);
       return h("div", { class: "card import-item" },
@@ -779,6 +811,8 @@ function importDialog() {
         what,
         h("div", { class: "row import-fields" },
           h("label", {}, "Name ", r.name), h("label", {}, "Tags ", r.tags), h("label", {}, "Group ", r.group)),
+        h("div", { class: "row import-fields" }, h("label", { class: "grow" }, "Description ", r.description)),
+        h("div", { class: "hint" }, "Agents pick connectors by name, description and aliases. Without a description they see one made from the server's tool names."),
         it.groups_existing && h("div", { class: "hint" }, it.variant_of + " has no group yet; importing this puts it in the same group."),
         (it.secrets || []).length > 0 && h("div", { class: "hint" }, "Secrets to the env file, not broker.yaml: ", it.secrets.map((s) => h("code", {}, s)).flatMap((x) => [x, " "])),
         it.entry.env && Object.keys(it.entry.env).length > 0 && h("div", { class: "hint" }, "Env: ", Object.entries(it.entry.env).map(([k, v]) => h("code", {}, k + "=" + v)).flatMap((x) => [x, " "])),
@@ -840,7 +874,9 @@ async function awsProfiles() {
   const rows = data.profiles.map((p) => {
     const ro = h("input", { type: "checkbox", checked: !!p.read_only });
     return h("tr", {},
-      h("td", {}, h("b", {}, p.name), h("div", { class: "hint" }, kindNote[p.kind] || p.kind)),
+      h("td", {}, h("b", {}, p.name),
+        (p.account_id || p.role) && h("div", {}, [p.account_id, p.role && "role " + p.role].filter(Boolean).join(" · ")),
+        h("div", { class: "hint" }, kindNote[p.kind] || p.kind)),
       h("td", {}, p.region || h("span", { class: "muted" }, "none")),
       h("td", {}, p.attached ? h("span", { class: "pill on" }, p.attached) : h("span", { class: "muted" }, "not attached")),
       h("td", {}, h("label", { class: "checks", title: "Only when the IAM role itself can't write: run_script then runs without approval" }, ro, "read-only role")),
@@ -855,7 +891,7 @@ async function awsProfiles() {
   dialog("AWS profiles",
     h("div", {},
       h("p", { class: "muted" }, "Profiles in ", h("code", {}, data.config), ". Attaching one adds a connector that reaches ", h("code", {}, data.endpoint),
-        " signed as that profile, tagged aws and grouped under AWS. Keys never go into broker.yaml: the proxy reads them the way the AWS CLI does."),
+        " signed as that profile, tagged aws and grouped under AWS, described to agents by account, role and region. Update rewrites it but keeps a description, aliases and group you set. Keys never go into broker.yaml: the proxy reads them the way the AWS CLI does."),
       data.profiles.length ? h("div", { class: "table-wrap" }, h("table", {},
         h("tr", {}, h("th", {}, "Profile"), h("th", {}, "Region"), h("th", {}, "Connector"), h("th", {}, "Policy"), h("th", {}, "")), rows))
         : h("div", { class: "empty" }, "No AWS profiles found.")),

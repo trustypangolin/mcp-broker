@@ -86,6 +86,12 @@ func (b *backend) SignIn(name string) (string, error) {
 }
 func (b *backend) SignOut(string) error          { return nil }
 func (b *backend) BrokerContextBytes(string) int { return 6000 }
+func (b *backend) AgentDescription(name string) string {
+	if cn := b.Config().Connectors[name]; !cn.NeedsDescription() {
+		return cn.Description
+	}
+	return "made up for " + name
+}
 func (b *backend) Tools(name string) gateway.ToolList {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -454,7 +460,7 @@ func TestProfileForm(t *testing.T) {
 
 func TestAttachAWSProfile(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "config"), []byte("[profile shared]\ncredential_process = signer --key k.pem\nregion = ap-southeast-2\n"), 0o600)
+	os.WriteFile(filepath.Join(dir, "config"), []byte("[profile shared]\ncredential_process = signer --key k.pem --role-arn arn:aws:iam::123456789012:role/Admin\nregion = ap-southeast-2\n"), 0o600)
 	t.Setenv("AWS_CONFIG_FILE", filepath.Join(dir, "config"))
 	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "none"))
 	f := newFixture(t, base)
@@ -468,13 +474,17 @@ func TestAttachAWSProfile(t *testing.T) {
 		c.ToolClasses["aws___run_script"] != config.Read || !slices.Equal(c.Args, wantArgs) {
 		t.Fatalf("connector: %+v", c)
 	}
+	// Agents are told the account, role and region, and can match the account number.
+	if want := "AWS account 123456789012 (role Admin, region ap-southeast-2) as profile shared (process), read-only role"; c.Description != want || !slices.Equal(c.Aliases, []string{"123456789012"}) {
+		t.Errorf("description %q aliases %v", c.Description, c.Aliases)
+	}
 	data, _ := os.ReadFile(f.b.path)
 	if strings.Contains(string(data), "signer") {
 		t.Error("credential_process leaked into broker.yaml")
 	}
 	_, out := f.do("GET", "/ui/api/aws", nil, nil)
 	p := out["profiles"].([]any)[0].(map[string]any)
-	if p["attached"] != "aws-shared" || p["read_only"] != true || p["kind"] != "process" {
+	if p["attached"] != "aws-shared" || p["read_only"] != true || p["kind"] != "process" || p["account_id"] != "123456789012" || p["role"] != "Admin" {
 		t.Errorf("list: %v", p)
 	}
 	if strings.Contains(fmt.Sprint(out), "signer") {
@@ -486,6 +496,69 @@ func TestAttachAWSProfile(t *testing.T) {
 	}
 	if st, _ := f.do("POST", "/ui/api/aws/nope/attach", map[string]any{}, nil); st != http.StatusNotFound {
 		t.Errorf("unknown profile: %d", st)
+	}
+	// Updating keeps a description, aliases and group a person set.
+	e := f.b.Config().Connectors["aws-shared"].Entry()
+	e.Description, e.Aliases, e.Group = "Shared services account", []string{"shared"}, "Cloud"
+	if st, out := f.do("PUT", "/ui/api/connectors/aws-shared", e, nil); st != 200 {
+		t.Fatalf("edit: %d %v", st, out)
+	}
+	if st, _ := f.do("POST", "/ui/api/aws/shared/attach", map[string]any{}, nil); st != 200 {
+		t.Fatalf("re-attach: %d", st)
+	}
+	c = f.b.Config().Connectors["aws-shared"]
+	if c.Description != "Shared services account" || c.Group != "Cloud" || !slices.Equal(c.Aliases, []string{"123456789012", "shared"}) {
+		t.Errorf("labels lost on update: %+v", c)
+	}
+}
+
+func TestGroupDescription(t *testing.T) {
+	f := newFixture(t, base)
+	f.signIn()
+	if st, _ := f.do("PUT", "/ui/api/groups/Fakes", map[string]any{"description": "x"}, nil); st != http.StatusNotFound {
+		t.Errorf("describe an empty group: %d", st)
+	}
+	f.do("POST", "/ui/api/groups", map[string]any{"section": "connectors", "names": []string{"fake"}, "group": "Fakes"}, nil)
+	if st, out := f.do("PUT", "/ui/api/groups/Fakes", map[string]any{"description": "  Test\n servers "}, nil); st != 200 {
+		t.Fatalf("describe: %d %v", st, out)
+	}
+	if d := f.b.Config().Groups["Fakes"].Description; d != "Test servers" {
+		t.Fatalf("description = %q", d)
+	}
+	_, out := f.do("GET", "/ui/api/connectors", nil, nil)
+	if fmt.Sprint(out["groups"]) != "map[Fakes:map[description:Test servers]]" {
+		t.Errorf("list groups: %v", out["groups"])
+	}
+	// Renaming the group takes its description along; ungrouping drops it.
+	f.do("POST", "/ui/api/groups", map[string]any{"section": "connectors", "names": []string{"fake"}, "group": "Mocks", "from": "Fakes"}, nil)
+	if g := f.b.Config().Groups; len(g) != 1 || g["Mocks"].Description != "Test servers" {
+		t.Errorf("after rename: %v", g)
+	}
+	f.do("POST", "/ui/api/groups", map[string]any{"section": "connectors", "names": []string{"fake"}, "group": "", "from": "Mocks"}, nil)
+	if g := f.b.Config().Groups; len(g) != 0 {
+		t.Errorf("after ungroup: %v", g)
+	}
+	// An empty description removes the entry.
+	f.do("POST", "/ui/api/groups", map[string]any{"section": "connectors", "names": []string{"fake"}, "group": "Fakes"}, nil)
+	f.do("PUT", "/ui/api/groups/Fakes", map[string]any{"description": "x"}, nil)
+	if st, _ := f.do("PUT", "/ui/api/groups/Fakes", map[string]any{"description": ""}, nil); st != 200 || len(f.b.Config().Groups) != 0 {
+		t.Errorf("clear: %d %v", st, f.b.Config().Groups)
+	}
+}
+
+// A connector without a real description is flagged, and the list says what agents see.
+func TestConnectorAgentDescription(t *testing.T) {
+	f := newFixture(t, base)
+	f.signIn()
+	e := f.b.Config().Connectors["fake"].Entry()
+	e.Description = "Imported from claude-code"
+	if st, out := f.do("PUT", "/ui/api/connectors/fake", e, nil); st != 200 {
+		t.Fatalf("put: %d %v", st, out)
+	}
+	_, out := f.do("GET", "/ui/api/connectors", nil, nil)
+	c := out["connectors"].([]any)[0].(map[string]any)
+	if c["needs_description"] != true || c["agent_description"] != "made up for fake" || !strings.Contains(fmt.Sprint(c["issues"]), "no description") {
+		t.Errorf("connector view: %v", c)
 	}
 }
 

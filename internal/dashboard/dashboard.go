@@ -42,6 +42,8 @@ type Backend interface {
 	Logger() *slog.Logger
 	// Tools lists a connector's tools, live or as last seen.
 	Tools(connector string) gateway.ToolList
+	// AgentDescription is the description list_connectors gives agents for a connector.
+	AgentDescription(connector string) string
 	// Discover starts a connector (agent's instance, for per_agent ones) to list its tools.
 	Discover(ctx context.Context, connector, agent string) (gateway.ToolList, error)
 	// BrokerContextBytes is what agent's context holds before it loads a connector.
@@ -222,6 +224,7 @@ func (d *Dashboard) Mount(mux *http.ServeMux) {
 	mux.Handle("POST /ui/api/connectors/{key}/unload", d.api(admin, d.unload))
 	mux.Handle("POST /ui/api/connectors/{name}/oauth/{action}", d.api(admin, d.oauthAction))
 	mux.Handle("POST /ui/api/groups", d.api(admin, d.setGroup))
+	mux.Handle("PUT /ui/api/groups/{name}", d.api(admin, d.putGroupDescription))
 	mux.Handle("POST /ui/api/import/plan", d.api(admin, d.importPlan))
 	mux.Handle("POST /ui/api/import/apply", d.api(admin, d.importApply))
 	mux.Handle("GET /ui/api/aws", d.api(admin, d.listAWS))

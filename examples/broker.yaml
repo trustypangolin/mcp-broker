@@ -134,12 +134,18 @@ policy:
 # ---------------------------------------------------------------------------
 # Connectors: downstream MCP servers, lazily started.
 # tool_classes overrides the name heuristic and downstream annotations.
-# group is a heading in the dashboard only (profiles take one too).
+# group is a heading in the dashboard (profiles take one too) and in list_connectors.
+# description and aliases are what agents match the user's words against.
 # ---------------------------------------------------------------------------
+groups:
+  Office:
+    description: Live editing of documents the user has open in Office apps
+
 connectors:
   excel-live:
     description: Live edit of workbooks open in Excel
     group: Office
+    aliases: [spreadsheet, workbook]
     tags: [office]
     command: uv
     args: [--directory, G:/Ai/MCP/excel-mcp-live, run, excel_mcp_server.py]

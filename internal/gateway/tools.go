@@ -34,7 +34,7 @@ func (g *Gateway) metaTools() []metaTool {
 	return []metaTool{
 		{&mcp.Tool{
 			Name:        "list_connectors",
-			Description: "List the connectors (downstream MCP servers) you can use.",
+			Description: "List the connectors (downstream MCP servers) you can use, by group. Match the user's words to names, descriptions and aliases.",
 			InputSchema: schema(nil),
 			Annotations: ro,
 		}, g.listConnectors, groupConnectors},

@@ -87,6 +87,7 @@ dialog.wide { width: min(1040px, 96vw); }
 .import-fields { gap: 10px; flex-wrap: wrap; }
 .import-fields label { display: flex; align-items: center; gap: 6px; margin: 0; }
 .import-fields input { width: auto; }
+.import-fields label.grow input { flex: 1; }
 .secret { font-family: ui-monospace, Consolas, monospace; background: var(--code); padding: 8px; border-radius: 6px; word-break: break-all; user-select: all; }
 .empty { text-align: center; padding: 28px; color: var(--muted); }
 .row > input, .row > select { width: auto; flex: 0 1 180px; }

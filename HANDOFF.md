@@ -26,7 +26,11 @@ stdio shim (`mcp-broker connect --agent NAME`) to Streamable HTTP on `:8765/mcp`
   returns a compact one-line-per-tool summary with each tool's required argument names
   (`detail: full` for the old output); `call_tool` adds a `describe_tool` hint when a
   downstream error reads as a schema mismatch;
-  `describe_tool` gives one tool's description and schema under `call_tool`'s rules. Test
+  `describe_tool` gives one tool's description and schema under `call_tool`'s rules.
+  `list_connectors` groups connectors by `group:` (with `groups.<name>.description` from
+  broker.yaml), shows `aliases:`, and replaces a missing or "Imported from …" description
+  with one derived from the cached server info (`tools-cache.json` `server`) and tool names
+  (`Gateway.AgentDescription`; the dashboard flags these as "no description"). Test
   budgets cap the meta-tool context (3.1 KB all, 2.0 KB without profiles). Downstream MCP
   servers start lazily.
 - **Approvals:** elicitation (owner agents only), tray notification, dashboard. The first

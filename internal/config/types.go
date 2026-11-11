@@ -22,6 +22,9 @@ type Config struct {
 	Policy     Policy               `yaml:"policy"`
 	Connectors map[string]Connector `yaml:"connectors"`
 	Profiles   map[string]Profile   `yaml:"profiles"`
+	// Groups describes the group headings connectors are filed under, for agents:
+	// list_connectors shows each group's description above its connectors.
+	Groups map[string]Group `yaml:"groups"`
 
 	// Path is the file the config was loaded from; Dir is its directory, against which
 	// relative paths in the config resolve.
@@ -92,12 +95,21 @@ type Policy struct {
 	Floors []Rule `yaml:"floors"`
 }
 
+// Group is what agents are told about a group of connectors.
+type Group struct {
+	Description string `json:"description" yaml:"description,omitempty"`
+}
+
 // Connector is a downstream MCP server: local (Command) or remote Streamable HTTP (URL).
 type Connector struct {
 	Description string `yaml:"description"`
-	// Group is a heading the dashboard files the connector under; it has no effect on
-	// policy.
-	Group       string            `yaml:"group"`
+	// Group is a heading the dashboard files the connector under, and list_connectors lists
+	// it under; it has no effect on policy.
+	Group string `yaml:"group"`
+	// Aliases are other names people use for what the connector reaches (an account
+	// number, a site's name), shown to agents so a request can be matched to it. They have
+	// no effect on policy.
+	Aliases     []string          `yaml:"aliases"`
 	Tags        []string          `yaml:"tags"`
 	Command     string            `yaml:"command"`
 	Args        []string          `yaml:"args"`
@@ -130,6 +142,17 @@ type OAuth struct {
 	// CGNAT addresses, such as a self-hosted GitLab behind a VPN. Without it the MCP SDK
 	// refuses them, to stop a server pointing the broker at the local network.
 	PrivateNetwork bool `json:"private_network,omitempty" yaml:"private_network,omitempty"`
+}
+
+// ImportedPlaceholder starts the description older imports wrote ("Imported from
+// claude-code"), which says where a connector came from, not what it does.
+const ImportedPlaceholder = "Imported from "
+
+// NeedsDescription reports whether the connector has no description worth showing an
+// agent: none, or an import's placeholder.
+func (c Connector) NeedsDescription() bool {
+	d := strings.TrimSpace(c.Description)
+	return d == "" || strings.HasPrefix(d, ImportedPlaceholder)
 }
 
 // Remote reports whether the connector is reached over HTTP rather than spawned.

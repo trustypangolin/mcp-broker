@@ -16,6 +16,7 @@ import (
 type ConnectorEntry struct {
 	Description string            `json:"description" yaml:"description,omitempty"`
 	Group       string            `json:"group" yaml:"group,omitempty"`
+	Aliases     []string          `json:"aliases" yaml:"aliases,omitempty,flow"`
 	Tags        []string          `json:"tags" yaml:"tags,omitempty,flow"`
 	Command     string            `json:"command" yaml:"command,omitempty"`
 	Args        []string          `json:"args" yaml:"args,omitempty"`
@@ -33,7 +34,7 @@ type ConnectorEntry struct {
 // Entry returns the connector in the form it is written back to broker.yaml.
 func (c Connector) Entry() ConnectorEntry {
 	e := ConnectorEntry{
-		Description: c.Description, Group: c.Group, Tags: c.Tags, Command: c.Command, Args: c.Args, Cwd: c.Cwd,
+		Description: c.Description, Group: c.Group, Aliases: c.Aliases, Tags: c.Tags, Command: c.Command, Args: c.Args, Cwd: c.Cwd,
 		Env: c.Env, EnvFile: c.EnvFile, URL: c.URL, Headers: c.Headers, OAuth: c.OAuth, IdleUnload: FormatDuration(c.IdleUnload),
 	}
 	if c.Instance != "shared" {

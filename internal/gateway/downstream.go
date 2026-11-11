@@ -152,7 +152,7 @@ func (d *downstream) connectLocked(ctx context.Context) error {
 		return fmt.Errorf("listing tools of %s: %w", d.name, err)
 	}
 	d.setTools(tools)
-	go d.g.remember(d.name, tools)
+	go d.g.remember(d.name, tools, serverMetaOf(sess.InitializeResult()))
 	return nil
 }
 
@@ -199,7 +199,7 @@ func (d *downstream) refreshTools() {
 	d.mu.Lock()
 	if d.session == sess {
 		d.setTools(tools)
-		go d.g.remember(d.name, tools)
+		go d.g.remember(d.name, tools, serverMetaOf(sess.InitializeResult()))
 	}
 	d.mu.Unlock()
 }

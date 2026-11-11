@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/trustypangolin/mcp-broker/internal/awsconfig"
@@ -121,7 +122,57 @@ func (d *Dashboard) attachAWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	d.apply(w, "connectors", name, awsEntry(p, body.ReadOnly))
+	e := awsEntry(p, body.ReadOnly)
+	if old, ok := cfg.Connectors[name]; ok {
+		e = keepLabels(e, old)
+	}
+	d.apply(w, "connectors", name, e)
+}
+
+// awsDescPrefix starts every description awsEntry writes, old and new, so attaching again
+// can tell its own text from one a person wrote.
+const awsDescPrefix = "AWS account"
+
+// keepLabels carries what a person set on an attached connector into its rewritten entry:
+// a description they wrote, their aliases, and the group.
+func keepLabels(e config.ConnectorEntry, old config.Connector) config.ConnectorEntry {
+	if d := strings.TrimSpace(old.Description); d != "" && !strings.HasPrefix(d, awsDescPrefix) {
+		e.Description = old.Description
+	}
+	for _, a := range old.Aliases {
+		if !slices.Contains(e.Aliases, a) {
+			e.Aliases = append(e.Aliases, a)
+		}
+	}
+	if old.Group != "" {
+		e.Group = old.Group
+	}
+	return e
+}
+
+// awsDescription says which account, role and region a profile reaches, so an agent can
+// match "the BBAD account" or an account number to the connector.
+func awsDescription(p *awsconfig.Profile, readOnly bool) string {
+	var b strings.Builder
+	b.WriteString(awsDescPrefix)
+	if p.AccountID != "" {
+		b.WriteString(" " + p.AccountID)
+	}
+	var facts []string
+	if p.Role != "" {
+		facts = append(facts, "role "+p.Role)
+	}
+	if p.Region != "" {
+		facts = append(facts, "region "+p.Region)
+	}
+	if len(facts) > 0 {
+		b.WriteString(" (" + strings.Join(facts, ", ") + ")")
+	}
+	fmt.Fprintf(&b, " as profile %s (%s)", p.Name, p.Kind)
+	if readOnly {
+		b.WriteString(", read-only role")
+	}
+	return b.String()
 }
 
 func awsEntry(p *awsconfig.Profile, readOnly bool) config.ConnectorEntry {
@@ -130,12 +181,8 @@ func awsEntry(p *awsconfig.Profile, readOnly bool) config.ConnectorEntry {
 	if path, err := exec.LookPath("uvx"); err == nil {
 		cmd = path
 	}
-	desc := fmt.Sprintf("AWS account access as profile %s (%s)", p.Name, p.Kind)
-	if readOnly {
-		desc += ", read-only role"
-	}
 	e := config.ConnectorEntry{
-		Description: desc,
+		Description: awsDescription(p, readOnly),
 		Group:       "AWS",
 		Tags:        []string{"aws"},
 		Command:     cmd,
@@ -144,6 +191,9 @@ func awsEntry(p *awsconfig.Profile, readOnly bool) config.ConnectorEntry {
 		// profile's for the dashboard.
 		Env:        map[string]string{"AWS_PROFILE": p.Name},
 		IdleUnload: "30m",
+	}
+	if p.AccountID != "" {
+		e.Aliases = []string{p.AccountID}
 	}
 	if readOnly {
 		e.ToolClasses = map[string]string{}

@@ -646,10 +646,11 @@ func Visibility(cfg *config.Config, items []Item) {
 
 // Choice is a person's edit to one planned item, by Item.ID.
 type Choice struct {
-	Skip  bool     `json:"skip"`
-	Name  string   `json:"name"`
-	Tags  []string `json:"tags"`
-	Group *string  `json:"group"`
+	Skip        bool     `json:"skip"`
+	Name        string   `json:"name"`
+	Tags        []string `json:"tags"`
+	Group       *string  `json:"group"`
+	Description *string  `json:"description"`
 }
 
 var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
@@ -683,6 +684,9 @@ func Choose(cfg *config.Config, items []Item, choices map[string]Choice) error {
 					it.Entry.Tags = append(it.Entry.Tags, t)
 				}
 			}
+		}
+		if c.Description != nil {
+			it.Entry.Description = strings.Join(strings.Fields(*c.Description), " ")
 		}
 		if c.Group != nil {
 			it.Entry.Group = strings.TrimSpace(*c.Group)
@@ -790,10 +794,8 @@ func (it *Item) build(o Options) {
 	} else {
 		e.Tags = guessTags(it.Name, s)
 	}
-	e.Description = "Imported from " + string(s.Source.Client)
-	if s.Scope != "" {
-		e.Description += " (project " + lastElem(s.Scope) + ")"
-	}
+	// No description: where it came from tells an agent nothing about what it does. Until
+	// someone writes one, agents see one made from the server's own info and tool names.
 	e.IdleUnload = "30m"
 	it.Entry = e
 	it.Notes = notes

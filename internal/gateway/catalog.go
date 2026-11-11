@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -36,20 +37,53 @@ func (t ToolMeta) Annotations() policy.Annotations {
 // last ran (Seen), or nothing when it never has.
 type ToolList struct {
 	Tools []ToolMeta `json:"tools"`
-	Seen  time.Time  `json:"seen,omitzero"`
-	Live  bool       `json:"live"`
+	// Server is what the server said about itself when it connected.
+	Server *ServerMeta `json:"server,omitempty"`
+	Seen   time.Time   `json:"seen,omitzero"`
+	Live   bool        `json:"live"`
+}
+
+// ServerMeta is a server's own account of itself, from its initialize result. It stands in
+// for a connector's description when broker.yaml has none.
+type ServerMeta struct {
+	Name         string `json:"name,omitempty"`
+	Title        string `json:"title,omitempty"`
+	Description  string `json:"description,omitempty"`
+	Instructions string `json:"instructions,omitempty"` // the first part only
 }
 
 // maxToolDesc keeps the cache small: the dashboard shows one line, not the whole manual.
 const maxToolDesc = 240
 
+// maxInstructions is how much of a server's instructions the cache keeps: enough for the
+// first sentence or two.
+const maxInstructions = 400
+
+func serverMetaOf(res *mcp.InitializeResult) *ServerMeta {
+	if res == nil {
+		return nil
+	}
+	m := &ServerMeta{Instructions: clip(strings.TrimSpace(res.Instructions), maxInstructions)}
+	if si := res.ServerInfo; si != nil {
+		m.Name, m.Title, m.Description = si.Name, si.Title, clip(strings.TrimSpace(si.Description), maxInstructions)
+	}
+	if *m == (ServerMeta{}) {
+		return nil
+	}
+	return m
+}
+
+func clip(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
+}
+
 func metaOf(tools []*mcp.Tool) []ToolMeta {
 	out := make([]ToolMeta, 0, len(tools))
 	for _, t := range tools {
-		m := ToolMeta{Name: t.Name, Description: t.Description, Bytes: entryBytes(t), SummaryBytes: summaryLineBytes(t)}
-		if r := []rune(m.Description); len(r) > maxToolDesc {
-			m.Description = string(r[:maxToolDesc]) + "…"
-		}
+		m := ToolMeta{Name: t.Name, Description: clip(t.Description, maxToolDesc), Bytes: entryBytes(t), SummaryBytes: summaryLineBytes(t)}
 		if t.Annotations != nil {
 			m.DestructiveHint = t.Annotations.DestructiveHint
 		}
@@ -93,8 +127,8 @@ func LoadWrapperBytes(name string) int {
 
 // remember records a connector's tool list and saves the catalog, so the dashboard can show
 // and set policy for tools of connectors that are not running.
-func (g *Gateway) remember(name string, tools []*mcp.Tool) {
-	l := ToolList{Tools: metaOf(tools), Seen: time.Now().UTC()}
+func (g *Gateway) remember(name string, tools []*mcp.Tool, server *ServerMeta) {
+	l := ToolList{Tools: metaOf(tools), Server: server, Seen: time.Now().UTC()}
 	g.catMu.Lock()
 	defer g.catMu.Unlock()
 	g.loadCatalogLocked()
@@ -144,8 +178,8 @@ func (g *Gateway) Tools(name string) ToolList {
 	}
 	g.mu.Unlock()
 	if live != nil {
-		if _, tools := live.snapshot(); len(tools) > 0 {
-			return ToolList{Tools: metaOf(tools), Seen: time.Now().UTC(), Live: true}
+		if sess, tools := live.snapshot(); len(tools) > 0 {
+			return ToolList{Tools: metaOf(tools), Server: sessionMeta(sess), Seen: time.Now().UTC(), Live: true}
 		}
 	}
 	g.catMu.Lock()
@@ -175,6 +209,76 @@ func (g *Gateway) Discover(ctx context.Context, name, agent string) (ToolList, e
 		}
 		g.write(e)
 	}
-	_, tools := d.snapshot()
-	return ToolList{Tools: metaOf(tools), Seen: time.Now().UTC(), Live: true}, nil
+	sess, tools := d.snapshot()
+	return ToolList{Tools: metaOf(tools), Server: sessionMeta(sess), Seen: time.Now().UTC(), Live: true}, nil
+}
+
+func sessionMeta(sess *mcp.ClientSession) *ServerMeta {
+	if sess == nil {
+		return nil
+	}
+	return serverMetaOf(sess.InitializeResult())
+}
+
+// maxDerived bounds a description made up for a connector that has none.
+const maxDerived = 220
+
+// AgentDescription is the description agents see for a connector: broker.yaml's, or, when
+// that is missing or an import's placeholder, one made from what the server said about
+// itself and its tool names (live, or as last seen).
+func (g *Gateway) AgentDescription(name string) string {
+	cn := g.st().cfg.Connectors[name]
+	if !cn.NeedsDescription() {
+		return cn.Description
+	}
+	return derivedDescription(g.Tools(name))
+}
+
+func derivedDescription(l ToolList) string {
+	var about string
+	if s := l.Server; s != nil {
+		for _, c := range []string{s.Description, firstSentence(s.Instructions), s.Title} {
+			if c = strings.TrimSpace(c); c != "" {
+				about = c
+				break
+			}
+		}
+	}
+	if len(l.Tools) == 0 {
+		if about == "" {
+			return "No description; load_connector lists its tools."
+		}
+		return clip(about, maxDerived)
+	}
+	about = clip(about, maxDerived/2)
+	tools := "Tools: "
+	for i, t := range l.Tools {
+		next := t.Name
+		if i > 0 {
+			next = ", " + next
+		}
+		if len(about)+len(tools)+len(next) > maxDerived-12 {
+			tools += fmt.Sprintf(", +%d more", len(l.Tools)-i)
+			break
+		}
+		tools += next
+	}
+	if about == "" {
+		return tools
+	}
+	return about + " " + tools
+}
+
+// firstSentence is s up to its first full stop, question mark or blank line.
+func firstSentence(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.Index(s, "\n\n"); i >= 0 {
+		s = s[:i]
+	}
+	for i, r := range s {
+		if (r == '.' || r == '?' || r == '!') && (i+1 == len(s) || s[i+1] == ' ' || s[i+1] == '\n') {
+			return strings.Join(strings.Fields(s[:i+1]), " ")
+		}
+	}
+	return strings.Join(strings.Fields(s), " ")
 }

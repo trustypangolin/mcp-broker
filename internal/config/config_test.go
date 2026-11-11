@@ -293,6 +293,49 @@ connectors:
 	}
 }
 
+func TestGroupsAndAliases(t *testing.T) {
+	cfg, err := Parse([]byte(`
+agents: {a: {role: r}}
+roles:
+  r: {connectors: ["*"]}
+groups:
+  AWS: {description: One per account}
+  Gone: {description: nobody here}
+connectors:
+  aws-x: {command: x, group: AWS, aliases: ["123456789012", BBAD], description: AWS account 123456789012}
+  notes: {command: n, description: Imported from claude-code}
+  bare: {command: b}
+`), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Groups["AWS"].Description != "One per account" || len(cfg.Connectors["aws-x"].Aliases) != 2 {
+		t.Fatalf("parsed: %+v %+v", cfg.Groups, cfg.Connectors["aws-x"])
+	}
+	if e := cfg.Connectors["aws-x"].Entry(); len(e.Aliases) != 2 {
+		t.Error("Entry drops aliases, so a dashboard save would too")
+	}
+	warn := map[string]bool{}
+	for _, i := range cfg.Check() {
+		if i.Warning {
+			warn[i.Where] = true
+		}
+	}
+	if !warn["connectors.notes.description"] || !warn["connectors.bare.description"] || warn["connectors.aws-x.description"] || !warn["groups.Gone"] || warn["groups.AWS"] {
+		t.Errorf("warnings: %v", warn)
+	}
+
+	_, err = Parse([]byte(`
+groups:
+  G: {description: "`+strings.Repeat("x", 301)+`"}
+connectors:
+  c: {command: c, aliases: [""]}
+`), t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "groups.G.description") || !strings.Contains(err.Error(), "connectors.c.aliases") {
+		t.Errorf("bad groups and aliases: %v", err)
+	}
+}
+
 func TestStarterIsValid(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "broker.yaml")
 	if err := WriteStarter(path); err != nil {

@@ -46,7 +46,9 @@ When a reload changes this, connected clients are told (`tools/list_changed`) an
 
 To use a connector, an agent calls:
 
-1. `list_connectors`;
+1. `list_connectors`, which lists connectors under their groups (each group with its
+   description), each with its description and aliases (see
+   [Helping agents pick the right connector](#helping-agents-pick-the-right-connector));
 2. `load_connector`, which by default returns one line per tool: name, first sentence,
    required argument names, class, and whether it needs approval;
 3. `describe_tool` for the tool it wants, to get that tool's full description and input
@@ -82,7 +84,9 @@ this computer**. The preview sorts every server into one of four groups:
 - **skipped:** SSE servers and the broker's own shim. Servers the client has disabled are
   listed but unticked.
 
-Edit the name, tags or group of any row, then click **Import selected**. Secret values stay
+Edit the name, tags, group or description of any row, then click **Import selected**.
+Imports no longer write an "Imported from …" placeholder description: write what the
+server is for, or leave it empty and agents see one made from the server's own info. Secret values stay
 on the broker: the preview shows only their names, and they're written to
 `secrets\<name>.env`.
 
@@ -96,9 +100,10 @@ other file with an `mcpServers` block. Add `--apply` to import, and
 The dashboard's Connectors and Profiles pages fold: click a card or group heading to
 collapse it (remembered per browser). **New group**, **Group…** on a card, and a group's
 **Rename** and **Ungroup** write a `group:` line on each member in `broker.yaml`, and a
-`group:` you type into the file shows up as a heading on the next reload. Groups are only
-labels: they don't change what agents see (use `tags` and roles for that), and regrouping
-a running connector doesn't restart it.
+`group:` you type into the file shows up as a heading on the next reload. Groups don't
+change which connectors an agent can use (use `tags` and roles for that), but
+`list_connectors` lists connectors under them. Regrouping a running connector doesn't
+restart it.
 
 ```yaml
 connectors:
@@ -106,6 +111,45 @@ connectors:
     group: ArtCraft MCPs
     command: C:\Program Files\CADCraft\cadcraft-cli.exe
     args: [mcp]
+```
+
+## Helping agents pick the right connector
+
+An agent picks a connector from what `list_connectors` returns, so that has to match the
+words you use. Several things help:
+
+- **Descriptions.** Say what the connector reaches and what it's for ("Strapi CMS for the
+  Parklands body corporate site"), not where it came from. A connector with no
+  description, or the old "Imported from claude-code" placeholder, gets a **no description**
+  flag on the dashboard and a `mcp-broker check` warning. Until you write one, agents see a
+  description made from the server's own info (its `serverInfo` description or title, or
+  the first sentence of its instructions) and its tool names, as last seen in
+  `tools-cache.json`.
+- **Aliases** are other names for what a connector reaches: an account number, a
+  nickname, a site's name. They're shown to agents and have no effect on policy.
+- **Group descriptions.** **Describe** on a connector group heading writes a description
+  that `list_connectors` shows above the group's connectors: what they have in common and
+  how to tell them apart.
+
+```yaml
+groups:
+  AWS:
+    description: One connector per AWS account; pick by account number or profile name.
+
+connectors:
+  aws-luton-shared:
+    group: AWS
+    description: AWS account 123456789012 (role Admin, region ap-southeast-2) as profile luton-shared (process)
+    aliases: [123456789012, shared services]
+```
+
+`list_connectors` then returns:
+
+```json
+{"groups": [{"group": "AWS", "description": "One connector per AWS account; …",
+             "connectors": [{"name": "aws-luton-shared", "description": "AWS account 123456789012 …",
+                             "aliases": ["123456789012", "shared services"], "loaded": false}]}],
+ "connectors": [ … the ungrouped ones … ]}
 ```
 
 The **Tools** page is a tree per agent: group → connector → tool. Each tool shows what a
@@ -149,7 +193,12 @@ starts a connector that has never run.
 ## AWS accounts
 
 **Connectors → AWS profiles…** lists the profiles in `~/.aws/config` and attaches any of
-them as a connector (`aws-<profile>`, group AWS, tag `aws`). Each one runs AWS's signing
+them as a connector (`aws-<profile>`, group AWS, tag `aws`, the account number as an
+alias, and a description naming the account, role and region, so an agent can tell the
+accounts apart). The account and role come from `sso_account_id`/`sso_role_name`,
+`role_arn`, or the `--role-arn` of a Roles Anywhere `credential_process`; nothing else on
+that command line is read. **Update** on an attached profile rewrites it but keeps a
+description, aliases and group you set. Each one runs AWS's signing
 proxy (`uvx mcp-proxy-for-aws`) as that profile against the managed AWS MCP server, so
 roles and approvals apply per account and no keys go into `broker.yaml`. Tick
 **read-only role** only when the IAM role itself can't write: `run_script` then runs

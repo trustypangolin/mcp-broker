@@ -349,6 +349,9 @@ func (b *Broker) ApplyUpdate() error {
 // Tools lists a connector's tools, live or as last seen, for the dashboard.
 func (b *Broker) Tools(connector string) gateway.ToolList { return b.gw.Tools(connector) }
 
+// AgentDescription is the description agents see for a connector.
+func (b *Broker) AgentDescription(connector string) string { return b.gw.AgentDescription(connector) }
+
 // BrokerContextBytes is the size of the broker's own tools and instructions as agent gets them.
 func (b *Broker) BrokerContextBytes(agent string) int { return b.gw.BrokerContextBytes(agent) }
 

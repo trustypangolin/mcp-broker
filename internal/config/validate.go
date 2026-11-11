@@ -19,6 +19,13 @@ import (
 
 var nameRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
+const (
+	// maxLabel bounds group names and aliases: one line each.
+	maxLabel = 64
+	// maxGroupDescription keeps group descriptions to a sentence or two.
+	maxGroupDescription = 300
+)
+
 // Validate checks the config's structure. It reports every problem at once, sorted, so a
 // user fixing broker.yaml by hand sees them all.
 func (c *Config) Validate() error {
@@ -48,6 +55,15 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	for name, g := range c.Groups {
+		if strings.TrimSpace(name) == "" || len(name) > maxLabel || strings.ContainsAny(name, "\r\n\t") {
+			add("groups: %q: group names are one line of 1 to %d characters", name, maxLabel)
+		}
+		if len(g.Description) > maxGroupDescription {
+			add("groups.%s.description: at most %d characters (agents read it on every list_connectors)", name, maxGroupDescription)
+		}
+	}
+
 	for name, cn := range c.Connectors {
 		p := "connectors." + name
 		if !nameRE.MatchString(name) || name == "profile" {
@@ -71,6 +87,11 @@ func (c *Config) Validate() error {
 			}
 			if cn.OAuth != nil {
 				add("%s: oauth only applies to remote connectors", p)
+			}
+		}
+		for _, a := range cn.Aliases {
+			if strings.TrimSpace(a) == "" || len(a) > maxLabel || strings.ContainsAny(a, "\r\n\t") {
+				add("%s.aliases: %q: aliases are one line of 1 to %d characters", p, a, maxLabel)
 			}
 		}
 		if o := cn.OAuth; o != nil {
@@ -300,9 +321,20 @@ func (c *Config) Check() []Issue {
 			}
 		}
 	}
+	inUse := map[string]bool{}
 	for _, name := range sortedKeys(c.Connectors) {
+		cn := c.Connectors[name]
+		inUse[cn.Group] = true
 		if !c.anyRoleSees(name) {
 			issue(true, "connectors."+name, "no role grants this connector")
+		}
+		if cn.NeedsDescription() {
+			issue(true, "connectors."+name+".description", "no description: agents see one made up from the server's own info and tool names, which may not say what it is for")
+		}
+	}
+	for _, name := range sortedKeys(c.Groups) {
+		if !inUse[name] {
+			issue(true, "groups."+name, "no connector is in this group")
 		}
 	}
 

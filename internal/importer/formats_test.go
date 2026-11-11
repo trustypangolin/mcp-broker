@@ -269,7 +269,7 @@ func TestProjectsInOneFile(t *testing.T) {
 		t.Error("identical server imported twice")
 	}
 	n := items["notes-beta"]
-	if !n.Imported() || !strings.Contains(strings.Join(n.Notes, " "), "renamed") || n.Entry.Description != "Imported from claude-code (project beta)" {
+	if !n.Imported() || !strings.Contains(strings.Join(n.Notes, " "), "renamed") || n.Entry.Description != "" {
 		t.Errorf("unrelated same name gets the project's name: %+v", n)
 	}
 }

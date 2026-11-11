@@ -58,7 +58,7 @@ func TestToolCacheSurvivesRestart(t *testing.T) {
 	g.remember("aws", []*mcp.Tool{
 		{Name: "run_script", Description: strings.Repeat("x", 1000)},
 		{Name: "drop", Annotations: &mcp.ToolAnnotations{DestructiveHint: &yes}},
-	})
+	}, &ServerMeta{Name: "aws-mcp", Instructions: "Runs AWS CLI scripts. Use run_script for everything."})
 	g.Close()
 
 	g = New(Options{Config: cfg, ToolCache: path})
@@ -72,6 +72,13 @@ func TestToolCacheSurvivesRestart(t *testing.T) {
 	}
 	if h := l.Tools[1].DestructiveHint; h == nil || !*h {
 		t.Error("destructive hint lost")
+	}
+	if l.Server == nil || l.Server.Name != "aws-mcp" {
+		t.Errorf("server info lost: %+v", l.Server)
+	}
+	// No description in the config: agents get one from the cached server info and tools.
+	if got, want := g.AgentDescription("aws"), "Runs AWS CLI scripts. Tools: run_script, drop"; got != want {
+		t.Errorf("AgentDescription = %q, want %q", got, want)
 	}
 	// The size counts the whole description, though the cache keeps a short one.
 	if b := l.Tools[0].Bytes; b < 1000 || l.Tools[1].Bytes == 0 {

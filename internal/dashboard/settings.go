@@ -32,6 +32,10 @@ type connectorView struct {
 	Instances []gateway.Connector   `json:"instances"`
 	VisibleTo []string              `json:"visible_to"`
 	Issues    []string              `json:"issues,omitempty"`
+	// AgentDescription is what list_connectors tells agents; NeedsDescription says it was
+	// made up because broker.yaml has none (or an import's placeholder).
+	AgentDescription string `json:"agent_description"`
+	NeedsDescription bool   `json:"needs_description,omitempty"`
 	// AWSProfile is set for connectors running AWS's proxy, so the forms can offer a
 	// profile picker.
 	AWSProfile string `json:"aws_profile,omitempty"`
@@ -50,7 +54,8 @@ func (d *Dashboard) listConnectors(w http.ResponseWriter, _ *http.Request) {
 	}
 	out := []connectorView{}
 	for _, name := range slices.Sorted(maps.Keys(cfg.Connectors)) {
-		v := connectorView{Name: name, Def: cfg.Connectors[name].Entry(), Instances: []gateway.Connector{}, VisibleTo: []string{}, Issues: issues[name]}
+		v := connectorView{Name: name, Def: cfg.Connectors[name].Entry(), Instances: []gateway.Connector{}, VisibleTo: []string{}, Issues: issues[name],
+			AgentDescription: d.b.AgentDescription(name), NeedsDescription: cfg.Connectors[name].NeedsDescription()}
 		if slices.ContainsFunc(cfg.Connectors[name].Args, func(a string) bool { return strings.HasPrefix(a, "mcp-proxy-for-aws") }) {
 			v.AWSProfile = awsProfileOf(cfg.Connectors[name])
 		}
@@ -66,7 +71,33 @@ func (d *Dashboard) listConnectors(w http.ResponseWriter, _ *http.Request) {
 		}
 		out = append(out, v)
 	}
-	writeJSON(w, map[string]any{"connectors": out, "classes": config.Classes})
+	groups := cfg.Groups
+	if groups == nil {
+		groups = map[string]config.Group{}
+	}
+	writeJSON(w, map[string]any{"connectors": out, "classes": config.Classes, "groups": groups})
+}
+
+// putGroupDescription sets (or, empty, removes) what agents are told about a connector
+// group.
+func (d *Dashboard) putGroupDescription(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.PathValue("name"))
+	var body config.Group
+	if err := decode(r, &body); err != nil {
+		jsonError(w, http.StatusBadRequest, "bad body: "+err.Error())
+		return
+	}
+	body.Description = strings.Join(strings.Fields(body.Description), " ")
+	cfg := d.b.Config()
+	if !slices.ContainsFunc(slices.Collect(maps.Values(cfg.Connectors)), func(c config.Connector) bool { return c.Group == name }) {
+		jsonError(w, http.StatusNotFound, "no connector is in group "+name)
+		return
+	}
+	var value any
+	if body.Description != "" {
+		value = body
+	}
+	d.apply(w, "groups", name, value)
 }
 
 // apply edits one entry of the config file, writes it and reloads the broker.
@@ -150,6 +181,8 @@ func (d *Dashboard) setGroup(w http.ResponseWriter, r *http.Request) {
 		Section string   `json:"section"`
 		Names   []string `json:"names"`
 		Group   string   `json:"group"`
+		// From is the group being renamed or ungrouped; its description moves with it.
+		From string `json:"from"`
 	}
 	if err := decode(r, &body); err != nil {
 		jsonError(w, http.StatusBadRequest, "bad body: "+err.Error())
@@ -187,11 +220,36 @@ func (d *Dashboard) setGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := config.SetFields(data, body.Section, body.Names, "group", body.Group)
+	if err == nil && body.Section == "connectors" && body.From != "" && body.From != body.Group {
+		out, err = moveGroupDescription(cfg, out, body.From, body.Group, body.Names)
+	}
 	if err != nil {
 		jsonError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	d.write(w, cfg.Path, out, config.Hash(data))
+}
+
+// moveGroupDescription follows a rename: when every member of group from moved, its
+// description goes to group to (dropped when ungrouping, kept when to already has one).
+func moveGroupDescription(cfg *config.Config, data []byte, from, to string, moved []string) ([]byte, error) {
+	desc, ok := cfg.Groups[from]
+	if !ok {
+		return data, nil
+	}
+	for name, c := range cfg.Connectors {
+		if c.Group == from && !slices.Contains(moved, name) {
+			return data, nil // some stay behind; the group still exists
+		}
+	}
+	out, err := config.SetEntry(data, "groups", from, nil)
+	if err != nil || to == "" {
+		return out, err
+	}
+	if _, has := cfg.Groups[to]; has {
+		return out, nil
+	}
+	return config.SetEntry(out, "groups", to, desc)
 }
 
 // agentForm is an agent as the form edits it.

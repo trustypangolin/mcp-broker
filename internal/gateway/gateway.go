@@ -321,19 +321,47 @@ func decodeArgs(req *mcp.CallToolRequest, v any) error {
 }
 
 type connectorInfo struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Loaded      bool   `json:"loaded"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Aliases     []string `json:"aliases,omitempty"`
+	Loaded      bool     `json:"loaded"`
 }
 
+type groupInfo struct {
+	Group       string          `json:"group"`
+	Description string          `json:"description,omitempty"`
+	Connectors  []connectorInfo `json:"connectors"`
+}
+
+// listConnectors lists what the agent can see, grouped as on the dashboard: named groups
+// first (with their descriptions), then the ungrouped connectors.
 func (g *Gateway) listConnectors(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	id := g.opts.Identity(req)
-	out := []connectorInfo{}
+	cfg := g.st().cfg
+	ungrouped := []connectorInfo{}
+	byGroup := map[string][]connectorInfo{}
 	for _, name := range g.st().pol.VisibleConnectors(id.Agent) {
 		d, _ := g.conn(name, id.Agent)
-		out = append(out, connectorInfo{Name: name, Description: g.st().cfg.Connectors[name].Description, Loaded: d.loaded()})
+		cn := cfg.Connectors[name]
+		info := connectorInfo{Name: name, Description: g.AgentDescription(name), Aliases: cn.Aliases, Loaded: d.loaded()}
+		if grp := strings.TrimSpace(cn.Group); grp != "" {
+			byGroup[grp] = append(byGroup[grp], info)
+		} else {
+			ungrouped = append(ungrouped, info)
+		}
 	}
-	return jsonResult(map[string]any{"connectors": out}), nil
+	out := map[string]any{}
+	if len(byGroup) > 0 {
+		groups := []groupInfo{}
+		for _, grp := range slices.Sorted(maps.Keys(byGroup)) {
+			groups = append(groups, groupInfo{Group: grp, Description: cfg.Groups[grp].Description, Connectors: byGroup[grp]})
+		}
+		out["groups"] = groups
+	}
+	if len(ungrouped) > 0 || len(byGroup) == 0 {
+		out["connectors"] = ungrouped
+	}
+	return jsonResult(out), nil
 }
 
 type toolInfo struct {
