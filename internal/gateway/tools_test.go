@@ -21,6 +21,8 @@ func TestSummarize(t *testing.T) {
 		"Insert text. Use the range param to pick where.":         "Insert text.",
 		"First line\nmore detail":                                 "First line",
 		"Version 1.2 is supported":                                "Version 1.2 is supported",
+		"Run one command by id, e.g. execute {id}. More here.":    "Run one command by id, e.g. execute {id}.",
+		"Press a key (i.e. a shortcut). Then more.":               "Press a key (i.e. a shortcut).",
 		strings.Repeat("word ", 40):                               strings.TrimSpace(strings.Repeat("word ", 20))[:99] + "…",
 		"  <p>Creates a page</p>. Then\n<b>lots</b> of HTML here": "<p>Creates a page</p>.",
 	} {

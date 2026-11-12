@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/trustypangolin/mcp-broker/internal/atomicfile"
 )
 
 // TokenPrefix starts every agent token, so a leaked one is recognisable in logs and by
@@ -204,7 +206,7 @@ func (s *Store) save(entries []TokenEntry) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp.Name(), s.path); err != nil {
+	if err := atomicfile.Rename(tmp.Name(), s.path); err != nil {
 		return err
 	}
 	return s.reload()

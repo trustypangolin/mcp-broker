@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/trustypangolin/mcp-broker/internal/atomicfile"
 )
 
 // SetEntry returns data with section.key (a top-level mapping such as "connectors" or
@@ -222,7 +224,7 @@ func WriteFile(path string, data []byte, expectHash string) error {
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return atomicfile.Rename(tmp, path)
 }
 
 // ErrChanged reports a write refused because the file changed since it was read.

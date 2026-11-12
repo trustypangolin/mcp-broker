@@ -931,7 +931,8 @@ pages.agents = async (main) => {
   const data = await api("GET", "agents");
   const roleNames = data.roles.map((r) => r.name);
   const cards = data.agents.map((a) => h("div", { class: "card" },
-    h("h3", {}, a.name, h("span", { class: "pill" }, "role " + a.def.role)),
+    h("h3", {}, a.name, h("span", { class: "pill" }, "role " + a.def.role),
+      a.def.mcp === false && h("span", { class: "pill", title: "This agent is refused on /mcp and works through the HTTP API and its skills" }, "MCP off · HTTP API + skills")),
     h("div", { class: "muted" },
       a.def.match.process && a.def.match.process.length ? ["Process: ", a.def.match.process.map((p) => h("code", {}, p)), " "] : "Any process. ",
       a.def.match.from && a.def.match.from.length ? ["From: ", a.def.match.from.join(", "), ". "] : "",
@@ -946,6 +947,7 @@ pages.agents = async (main) => {
     h("div", { class: "row", style: "margin-top:8px" },
       h("button", { class: "primary", onclick: () => newToken(a.name) }, "New token"),
       h("button", { onclick: () => clientConfig(a.name, a.saved_token) }, "Client config…"),
+      h("button", { disabled: !a.visible.length, title: "Download skills that let this agent use its connectors over the HTTP API, without MCP", onclick: () => skillsDialog(a.name, a.visible, a.def.mcp === false) }, "Skills…"),
       h("button", { onclick: () => editAgent(a.name, a.def, roleNames, data.channels) }, "Edit"),
       h("button", { class: "danger", onclick: (ev) => removeAgent(ev.target, a.name) }, "Remove"))));
   const roles = h("div", { class: "card table-wrap" }, h("table", {},
@@ -956,7 +958,7 @@ pages.agents = async (main) => {
       h("td", {}, data.classes.map((c) => r.classes && r.classes[c] ? h("span", { class: "pill " + r.classes[c] }, c + ": " + r.classes[c]) : null),
         (r.rules || []).length > 0 && h("div", { class: "hint" }, r.rules.length + " rule(s)"))))));
   fill(main,
-    h("div", { class: "row spread" }, h("h2", {}, "Agents"), h("button", { class: "primary", onclick: () => editAgent(null, { role: roleNames[0], match: {}, approvals: ["tray", "dashboard"] }, roleNames, data.channels) }, "Add agent")),
+    h("div", { class: "row spread" }, h("h2", {}, "Agents"), h("div", { class: "row" }, h("button", { title: "Download the skill that teaches any agent the broker's HTTP API", onclick: () => skillsDialog(null) }, "API skill…"), h("button", { class: "primary", onclick: () => editAgent(null, { role: roleNames[0], match: {}, approvals: ["tray", "dashboard"] }, roleNames, data.channels) }, "Add agent"))),
     cards.length ? cards : h("div", { class: "card empty" }, "No agents yet."),
     h("h2", { style: "margin-top:24px" }, "Roles"),
     h("p", { class: "muted" }, "Edit roles in the Config tab. Connector selectors run in order and the last match wins; ! excludes."),
@@ -971,6 +973,7 @@ function editAgent(name, def, roles, channels) {
     from: h("textarea", { value: (def.match.from || []).join("\n"), placeholder: "127.0.0.0/8" }),
   };
   const chans = channels.map((c) => h("input", { type: "checkbox", value: c, checked: (def.approvals || []).includes(c) }));
+  const mcp = h("input", { type: "checkbox", checked: def.mcp !== false });
   dialog(name ? "Edit " + name : "Add agent",
     h("div", {},
       h("div", { class: "grid2" }, field("Name", f.name), field("Role", f.role)),
@@ -978,7 +981,9 @@ function editAgent(name, def, roles, channels) {
       field("Source networks", f.from, "CIDRs the token may be used from, one per line. Empty means any allowed source."),
       h("label", {}, "Approval channels"),
       h("div", { class: "checks" }, chans.map((c) => h("label", {}, c, c.value))),
-      h("div", { class: "hint" }, "Only give elicitation to interactive apps you sit in front of: a headless agent could approve its own requests.")),
+      h("div", { class: "hint" }, "Only give elicitation to interactive apps you sit in front of: a headless agent could approve its own requests."),
+      h("div", { class: "checks", style: "margin-top:10px" }, h("label", {}, mcp, "MCP endpoint")),
+      h("div", { class: "hint" }, "Untick to refuse this agent on /mcp. Its token keeps working on the HTTP API (/api/v1), which it uses through the skills from Skills…; elicitation is then unavailable, so give it tray or dashboard approvals.")),
     (close) => [
       h("button", { onclick: close }, "Cancel"),
       h("button", { class: "primary", onclick: (ev) => run(ev.target, async () => {
@@ -989,10 +994,109 @@ function editAgent(name, def, roles, channels) {
           match: { process: lines(f.process.value), from: lines(f.from.value) },
           approvals: chans.filter((c) => c.checked).map((c) => c.value),
         };
+        if (!mcp.checked) body.mcp = false;
         toast(reloadSummary(await api("PUT", "agents/" + encodeURIComponent(n), body)));
         close();
         route();
       }) }, "Save and apply"),
+    ]);
+}
+
+// skillsDialog downloads skills: an agent's connector skills, or (agent null) just the
+// mcp-broker-api skill, which teaches any agent the broker's HTTP API. Skills either call
+// this broker's API (an agent that can't or mayn't use MCP, here or on another computer
+// that reaches this broker) or each connector's server directly (a computer where no
+// broker runs). They come laid out for the chosen agent type.
+async function skillsDialog(agent, visible, mcpOff) {
+  const { formats } = await api("GET", "skills/formats");
+  const format = h("select", {}, formats.map((f) => h("option", { value: f.id }, f.title)));
+  const target = h("select", {},
+    h("option", { value: "broker" }, "This broker's HTTP API"),
+    agent && h("option", { value: "direct" }, "Each server directly (no broker on that computer)"));
+  const base = h("input", { value: location.origin + "/api/v1" });
+  const portable = h("input", { type: "checkbox" });
+  const meta = h("input", { type: "checkbox", checked: true });
+  const boxes = (visible || []).map((c) => h("input", { type: "checkbox", value: c, checked: true }));
+  const all = (on) => boxes.forEach((b) => { b.checked = on; });
+  const install = h("div", { class: "hint" });
+  const targetHint = h("div", { class: "hint" });
+  const brokerOnly = h("div", {},
+    field("Broker address the skills use", base, "Where the agent reaches this broker: change it for another computer, WSL or a central office broker. MCP_BROKER_API overrides it where the agent runs."),
+    h("div", { class: "checks", style: "margin-top:8px" },
+      h("label", { title: "Leave out this computer's token file path; the agent then reads MCP_BROKER_TOKEN (or asks the user)" }, portable, "For another computer (no local token file)"),
+      agent && h("label", { title: "The skill that teaches the whole HTTP API" }, meta, "Include mcp-broker-api")));
+  const out = h("div", {});
+  const draw = () => {
+    const f = formats.find((x) => x.id === format.value);
+    fill(install, "Install: ", f ? f.install : "");
+    const direct = target.value === "direct";
+    brokerOnly.hidden = direct;
+    fill(targetHint, direct
+      ? ["Each skill carries its server's settings (server.json) and a small client (Python 3.8+ or Windows PowerShell 5.1, nothing to install). ",
+        h("b", {}, "No secrets are included"), ": the skills name the environment variables to set on that computer. The broker's policies, approvals and audit don't apply there. Servers that need an OAuth sign-in can't be used this way."]
+      : ["Calls go through this broker with ", agent ? h("b", {}, agent) : "an agent", "'s token, so its policies, approvals and audit apply. ",
+        "Works with MCP on or off: the token is good for both. The broker must be running and reachable at the address above."]);
+  };
+  for (const el of [format, target]) el.addEventListener("change", draw);
+  draw();
+  dialog(agent ? "Skills for " + agent : "API skill (mcp-broker-api)",
+    h("div", {},
+      agent
+        ? h("p", { class: "muted" }, "One skill per connector, so ", agent, " can use them without an MCP client, here or on a computer you copy or email the files to.")
+        : h("p", { class: "muted" }, "The skill that teaches an agent mcp-broker's HTTP API: list connectors, call tools, handle approvals and app profiles. It is all an agent needs when it can't use MCP (or isn't allowed to). Connectors start on the first call; they don't need to be running."),
+      h("div", { class: "grid2" }, field("Agent type", format), agent ? field("Calls go to", target) : h("div", {})),
+      install,
+      targetHint,
+      brokerOnly,
+      agent && [
+        h("div", { class: "row", style: "margin-top:10px" }, h("b", {}, "Connectors "), h("button", { class: "link", onclick: () => all(true) }, "All"), h("button", { class: "link", onclick: () => all(false) }, "None")),
+        h("div", { class: "checks" }, boxes.map((b) => h("label", {}, b, b.value))),
+        h("div", { class: "hint" }, "The broker starts each connector to read its tools and schemas; one that won't start gets the tool list it last had."),
+        mcpOff === false && h("div", { class: "hint" }, "MCP is on for ", agent, ". That's fine: the skills work either way. To make it skills-only, untick MCP endpoint under Edit."),
+      ],
+      out),
+    (close) => [
+      h("button", { onclick: close }, "Close"),
+      h("button", { class: "primary", onclick: (ev) => run(ev.target, async () => {
+        const p = new URLSearchParams({ format: format.value, target: agent ? target.value : "broker" });
+        if (target.value !== "direct" || !agent) {
+          p.set("base", base.value.trim());
+          if (portable.checked) p.set("portable", "1");
+        }
+        if (agent) {
+          const picked = boxes.filter((b) => b.checked).map((b) => b.value);
+          if (!picked.length && (!meta.checked || target.value === "direct")) throw new Error("Pick at least one connector.");
+          p.set("agent", agent);
+          p.set("connectors", picked.length === boxes.length ? "" : picked.length ? picked.join(",") : "none");
+          if (!meta.checked) p.set("meta", "0");
+          fill(out, h("div", { class: "hint" }, "Starting ", picked.length, " connector(s) and writing skills…"));
+        }
+        const resp = await fetch("/ui/api/skills?" + p, { method: "POST", headers: { "X-Mcpb": "1" } });
+        if (resp.status === 401) { location.href = "/ui/login"; return; }
+        if (!resp.ok) {
+          const data = await resp.json().catch(() => ({}));
+          throw new Error(data.error || resp.statusText);
+        }
+        let report = [];
+        try { report = JSON.parse(resp.headers.get("X-Mcpb-Skills") || "[]") || []; } catch { /* no report */ }
+        const cd = resp.headers.get("Content-Disposition") || "";
+        const m = /filename="([^"]+)"/.exec(cd);
+        const file = m ? m[1] : "mcp-broker-skills.zip";
+        const url = URL.createObjectURL(await resp.blob());
+        const a = h("a", { href: url, download: file });
+        document.body.append(a);
+        a.click();
+        a.remove();
+        fill(out,
+          h("div", { class: "row spread", style: "margin-top:10px" }, h("b", {}, "Downloaded ", h("code", {}, file)), h("a", { href: url, download: file }, "Download again")),
+          report.length > 0 && h("div", { class: "table-wrap" }, h("table", {},
+            h("tr", {}, h("th", {}, "Connector"), h("th", {}, "Skill"), h("th", {}, "Tools"), h("th", {}, "From")),
+            report.map((c) => h("tr", {},
+              h("td", {}, c.connector), h("td", {}, h("code", {}, c.skill)), h("td", {}, String(c.tools)),
+              h("td", {}, c.source === "live" ? "running connector" : c.source === "cache" ? h("span", { class: "warn", title: c.error }, "last-seen list (no schemas)") : h("span", { class: "warn", title: c.error }, "no tools known"),
+                c.error && h("div", { class: "hint" }, c.error)))))));
+        toast("Downloaded " + file);
+      }) }, "Generate and download"),
     ]);
 }
 

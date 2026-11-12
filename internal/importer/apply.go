@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/trustypangolin/mcp-broker/internal/atomicfile"
 	"github.com/trustypangolin/mcp-broker/internal/config"
 )
 
@@ -188,7 +189,7 @@ func Switch(src Source, items []Item, shimExe string) (Switched, error) {
 	if err := os.WriteFile(tmp, pretty.Bytes(), 0o600); err != nil {
 		return res, err
 	}
-	if err := os.Rename(tmp, src.Path); err != nil {
+	if err := atomicfile.Rename(tmp, src.Path); err != nil {
 		return res, err
 	}
 	res.Removed = names

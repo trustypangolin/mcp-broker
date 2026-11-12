@@ -113,6 +113,96 @@ connectors:
     args: [mcp]
 ```
 
+### Three ways to use the broker
+
+| | How the agent connects | Needs on the agent's computer | Policy, approvals, audit |
+|---|---|---|---|
+| **1. MCP** | `broker` in the client's MCP config (above) | the stdio shim, or HTTP | yes |
+| **2. HTTP API + skills** | the `mcp-broker-api` skill (and per-connector skills) calling `/api/v1` | `curl` (or PowerShell) and a token; a broker running here or reachable | yes |
+| **3. Skills straight to each server** | per-connector skills with a bundled client | each server installed or reachable; Python 3.8+ or Windows PowerShell 5.1 | no: there's no broker |
+
+2 is for clients where MCP isn't possible or isn't allowed (an enterprise Claude with
+controlled MCP, a sandbox that only has `curl`, a script or CI job). The same token works
+for MCP and the API at once, so 1 and 2 can be mixed. 3 is for locked-down computers where
+the broker can't be installed: copy or email them the skill files.
+
+#### 2. The HTTP API
+
+The API at `/api/v1` offers the same meta-tools as plain HTTP + JSON, with the same agent
+token. Policy, approvals, redaction and the audit log are identical (audit lines show the
+client as `http-api (<User-Agent>)`). It can't change config, rules or tokens.
+
+```bash
+H="Authorization: Bearer $MCP_BROKER_TOKEN"
+curl -s -H "$H" http://127.0.0.1:8765/api/v1/connectors
+curl -s -H "$H" http://127.0.0.1:8765/api/v1/connectors/imap/tools
+curl -s -H "$H" -d '{"arguments":{"query":"invoice"}}' \
+  http://127.0.0.1:8765/api/v1/connectors/imap/tools/search_emails/call
+```
+
+Connectors start on the first call, so they don't need to be running. A call that needs
+approval waits about 25 s, then returns **202** with an `approval_id`. Poll
+`GET /api/v1/approvals/{id}?wait=60` until it's approved, then repeat the call with
+`"approval_id"` in the body. `POST /api/v1/rpc/{meta_tool}` takes any meta-tool's MCP
+arguments verbatim.
+
+**The meta-skill.** `mcp-broker-api`
+([skills/mcp-broker-api/SKILL.md](skills/mcp-broker-api/SKILL.md)) teaches an agent the
+whole API: finding the broker and token, listing and calling tools, approvals, app
+profiles, PowerShell. With it alone an agent can use every connector. To get it:
+- **API skill…** on the dashboard's Agents page, in any agent layout and pointed at any
+  broker address;
+- `mcp-broker skill -o <project> -format cursor -base https://broker.corp:8765/api/v1`,
+  which needs no running broker;
+- `GET /api/v1/skill.md` from the running broker (no token needed).
+
+Give an API-only agent its own entry under `agents:` and a token from
+`mcp-broker token create <agent>`. A `match.process` written for a desktop client usually
+won't match a script. To refuse an agent on MCP altogether, untick **MCP endpoint** under its
+**Edit** (`mcp: false`). It keeps working on the API. Give it `tray` or `dashboard`
+approvals, since elicitation needs MCP.
+
+#### Per-connector skills, and 3: skills without a broker
+
+**Agents → Skills…** (or `mcp-broker skill --agent NAME -o <project> -format F -target T`)
+writes one skill per connector the agent can see. The broker starts each one to read its
+tools. Options:
+
+- **Agent type** (`-format`):
+  - `claude` (`.claude/skills/`);
+  - `claude-upload` (one zip per skill, for claude.ai and Claude Desktop);
+  - `codex` (`.codex/skills/`);
+  - `cursor` (`.cursor/rules/*.mdc`);
+  - `windsurf` (`.windsurf/rules/`);
+  - `copilot` (`.github/instructions/`);
+  - `agents-md` (an `AGENTS.md` index);
+  - `gemini` (a `GEMINI.md` index).
+
+  Files an agent reads on every request (AGENTS.md, GEMINI.md, Copilot instructions) hold
+  only a short index pointing at `mcp-broker/<skill>/SKILL.md`. Large tool tables move out
+  of rule files into `TOOLS.md`.
+- **Calls go to** (`-target`):
+  - `broker` (case 2): calls go to the broker address you give, which can be a central
+    one. Tick **For another computer** (`-portable`) to leave out this computer's token
+    file path; the agent then reads `MCP_BROKER_TOKEN`.
+  - `direct` (case 3): each skill carries a `server.json` (command and arguments, or URL)
+    and `scripts/mcp_call.py` / `mcp_call.ps1`, a small MCP client with nothing to
+    install. Secrets are never included. A secret-named `env` value, a header or an
+    `env_file` entry becomes a `${VAR}` that the skill tells the user to set on that
+    computer. A shared env file contributes only the names this connector references.
+    Each run starts the server and stops it again; `--steps` runs several calls on one
+    server for stateful work. The broker's policy and approvals don't apply. Tools that
+    would need approval are marked, and the skill tells the agent to ask the user first.
+    OAuth servers can't be reached this way.
+
+Each skill's `SKILL.md` has a description that triggers on the connector's name,
+description, aliases and tool names, says how to call it, and has a table of the tools the
+agent's policy allows. `tools/<tool>.md` gives each tool's description, an example and its
+input schema. A connector that won't start gets a skill from the tool list it last had,
+without schemas. The zip's README says how to install it for the chosen agent type and how
+each connector went. An agent can fetch its own skills with `POST /api/v1/skills` (same
+options as query parameters). Regenerate after adding connectors or when tools change.
+
 ## Helping agents pick the right connector
 
 An agent picks a connector from what `list_connectors` returns, so that has to match the
@@ -349,6 +439,8 @@ programs it runs from (`-check` only reports; `-stable` skips pre-releases). The
 | `mcp-broker signin NAME` / `signout NAME` | sign in to an OAuth connector, or forget its token |
 | `mcp-broker init` / `validate` | create a starter config / check one |
 | `mcp-broker self-update [-check] [-stable]` | install the newest release over these programs |
+| `mcp-broker skill [-o DIR] [-format F] [-base URL]` | print, or write in an agent type's layout, the `mcp-broker-api` skill (no broker needed) |
+| `mcp-broker skill --agent NAME -o DIR [-format F] [-target broker\|direct] [-portable]` | write per-connector skills from the running broker (`-formats` lists the layouts) |
 
 `client-config` prints a snippet to paste into a client's config. The clients are
 `claude-code`, `claude-desktop`, `vscode`, `codex`, `cursor`, `gemini` and `windsurf`. It

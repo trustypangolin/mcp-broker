@@ -33,6 +33,7 @@ commands:
   plan        show what starting (or --for update) a profile would do
   signin      sign the broker in to an oauth connector (signout forgets the token)
   self-update install the newest release over these programs (-check only reports)
+  skill       print (or -o DIR: install) the agent skill for the HTTP API, /api/v1
   version     print version
 
 Run 'mcp-broker <command> -h' for command flags.
@@ -95,6 +96,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdSignIn(cmd, rest, stdout, stderr)
 	case "self-update":
 		return cmdSelfUpdate(rest, stdout, stderr)
+	case "skill":
+		return cmdSkill(rest, stdout, stderr)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return nil

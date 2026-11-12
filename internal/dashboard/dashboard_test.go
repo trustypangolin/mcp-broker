@@ -1,6 +1,8 @@
 package dashboard
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -23,6 +25,7 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/gateway"
 	"github.com/trustypangolin/mcp-broker/internal/identity"
 	"github.com/trustypangolin/mcp-broker/internal/server"
+	"github.com/trustypangolin/mcp-broker/internal/skillgen"
 	"github.com/trustypangolin/mcp-broker/internal/supervisor"
 )
 
@@ -86,6 +89,13 @@ func (b *backend) SignIn(name string) (string, error) {
 }
 func (b *backend) SignOut(string) error          { return nil }
 func (b *backend) BrokerContextBytes(string) int { return 6000 }
+func (b *backend) AgentSkills(_ context.Context, agent string, o gateway.SkillOptions) ([]skillgen.Connector, []gateway.SkillConnector) {
+	c := skillgen.Connector{Name: "fake", Description: "for " + agent, Source: "live", Tools: []skillgen.Tool{{Name: "get_echo", Class: "read"}}}
+	if o.Direct {
+		c.Direct = &skillgen.Direct{Transport: "stdio", Command: "fake.exe"}
+	}
+	return []skillgen.Connector{c}, []gateway.SkillConnector{{Connector: "fake", Tools: 1, Source: "live"}}
+}
 func (b *backend) AgentDescription(name string) string {
 	if cn := b.Config().Connectors[name]; !cn.NeedsDescription() {
 		return cn.Description
@@ -304,6 +314,92 @@ func TestConnectorAndAgentForms(t *testing.T) {
 	}
 	if _, ok := f.b.tokens.Lookup(out["token"].(string)); ok {
 		t.Fatal("token still valid")
+	}
+
+	// MCP off: the form writes mcp: false, lists it back, and a later save keeps it only
+	// if the form sends it (the checkbox).
+	off := false
+	if st, out := f.do("PUT", "/ui/api/agents/lan", agentForm{Role: "coder", Approvals: []string{"dashboard"}, MCP: &off}, nil); st != 200 {
+		t.Fatalf("put agent mcp off: %d %v", st, out)
+	}
+	if !f.b.Config().Agents["lan"].MCPOff() {
+		t.Fatal("mcp: false not applied")
+	}
+	if b, _ := os.ReadFile(f.b.path); !strings.Contains(string(b), "mcp: false") {
+		t.Fatalf("broker.yaml lacks mcp: false:\n%s", b)
+	}
+	_, list := f.do("GET", "/ui/api/agents", nil, nil)
+	for _, a := range list["agents"].([]any) {
+		if a := a.(map[string]any); a["name"] == "lan" && a["def"].(map[string]any)["mcp"] != false {
+			t.Errorf("agent list doesn't show mcp off: %v", a["def"])
+		}
+	}
+	if st, _ := f.do("PUT", "/ui/api/agents/lan", agentForm{Role: "coder", Approvals: []string{"dashboard"}}, nil); st != 200 || f.b.Config().Agents["lan"].MCPOff() {
+		t.Fatal("turning MCP back on")
+	}
+}
+
+func TestAgentSkillsDownload(t *testing.T) {
+	f := newFixture(t, base)
+	f.signIn()
+	get := func(query string) (*http.Response, []string) {
+		t.Helper()
+		req, _ := http.NewRequest("POST", f.url+"/ui/api/skills"+query, nil)
+		req.Header.Set("X-Mcpb", "1")
+		resp, err := f.client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "application/zip" {
+			t.Fatalf("skills%s: %d %s", query, resp.StatusCode, body)
+		}
+		zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, zf := range zr.File {
+			names = append(names, zf.Name)
+		}
+		return resp, names
+	}
+
+	resp, names := get("?agent=vscode")
+	if !strings.Contains(resp.Header.Get("Content-Disposition"), "mcp-broker-skills-vscode-claude.zip") || !strings.Contains(resp.Header.Get("X-Mcpb-Skills"), `"skill":"broker-fake"`) {
+		t.Errorf("headers: %v", resp.Header)
+	}
+	for _, want := range []string{".claude/skills/broker-fake/SKILL.md", ".claude/skills/mcp-broker-api/SKILL.md", "README.md"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("zip lacks %s: %v", want, names)
+		}
+	}
+	// One connector, for Copilot, straight to its server.
+	_, names = get("?agent=vscode&connectors=fake&format=copilot&target=direct")
+	for _, want := range []string{".github/instructions/broker-fake.instructions.md", "mcp-broker/broker-fake/server.json", "mcp-broker/broker-fake/scripts/mcp_call.ps1"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("direct copilot zip lacks %s: %v", want, names)
+		}
+	}
+	// No agent: the meta-skill alone, in any layout.
+	_, names = get("?format=agents-md&base=https%3A%2F%2Fbroker.corp%2Fapi%2Fv1")
+	if !slices.Equal(names, []string{"AGENTS.md", "mcp-broker/mcp-broker-api/SKILL.md", "README.md"}) {
+		t.Errorf("meta-only zip: %v", names)
+	}
+
+	if st, out := f.do("GET", "/ui/api/skills/formats", nil, nil); st != 200 || len(out["formats"].([]any)) != len(skillgen.Formats) {
+		t.Errorf("formats: %d %v", st, out)
+	}
+	// Writes need the CSRF header; unknown agents and formats are refused.
+	if st, _ := f.do("POST", "/ui/api/skills?agent=vscode", nil, map[string]string{"X-Mcpb": ""}); st != http.StatusForbidden {
+		t.Errorf("without CSRF header: %d", st)
+	}
+	if st, _ := f.do("POST", "/ui/api/skills?agent=nobody", nil, nil); st != http.StatusNotFound {
+		t.Errorf("unknown agent: %d", st)
+	}
+	if st, _ := f.do("POST", "/ui/api/skills?format=nope", nil, nil); st != http.StatusBadRequest {
+		t.Errorf("unknown format: %d", st)
 	}
 }
 

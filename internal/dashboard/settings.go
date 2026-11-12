@@ -20,6 +20,8 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/gateway"
 	"github.com/trustypangolin/mcp-broker/internal/identity"
 	"github.com/trustypangolin/mcp-broker/internal/policy"
+	"github.com/trustypangolin/mcp-broker/internal/server"
+	"github.com/trustypangolin/mcp-broker/internal/skillgen"
 )
 
 // validName matches connector and agent names the forms may create. YAML allows more, and
@@ -257,6 +259,8 @@ type agentForm struct {
 	Role      string         `json:"role" yaml:"role"`
 	Match     agentMatchForm `json:"match" yaml:"match,omitempty"`
 	Approvals []string       `json:"approvals" yaml:"approvals,omitempty,flow"`
+	// MCP mirrors config.Agent.MCP, or a dashboard save would drop a hand-written mcp: false.
+	MCP *bool `json:"mcp,omitempty" yaml:"mcp,omitempty"`
 }
 
 type agentMatchForm struct {
@@ -294,7 +298,7 @@ func (d *Dashboard) listAgents(w http.ResponseWriter, _ *http.Request) {
 	out := []agentView{}
 	for _, name := range slices.Sorted(maps.Keys(cfg.Agents)) {
 		a := cfg.Agents[name]
-		v := agentView{Name: name, Def: agentForm{Role: a.Role}, Visible: pol.VisibleConnectors(name), Tokens: []tokenView{}}
+		v := agentView{Name: name, Def: agentForm{Role: a.Role, MCP: a.MCP}, Visible: pol.VisibleConnectors(name), Tokens: []tokenView{}}
 		if v.Visible == nil {
 			v.Visible = []string{} // a fresh config has no connectors; the page reads .length
 		}
@@ -343,6 +347,24 @@ func (d *Dashboard) putAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.apply(w, "agents", name, f)
+}
+
+// skills downloads skills as a zip (see server.SkillZip for the query): an agent's
+// connector skills, to use through this broker's API or straight against each server, in
+// the layout an agent type expects; with no agent, the mcp-broker-api meta-skill alone.
+func (d *Dashboard) skills(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("agent")
+	cfg := d.b.Config()
+	if _, ok := cfg.Agents[name]; name != "" && !ok {
+		jsonError(w, http.StatusNotFound, "no such agent")
+		return
+	}
+	server.SkillZip(w, r, d.b.AgentSkills, cfg, name)
+}
+
+// skillFormats lists the layouts skills can be downloaded in.
+func (d *Dashboard) skillFormats(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, map[string]any{"formats": skillgen.Formats})
 }
 
 func (d *Dashboard) deleteAgent(w http.ResponseWriter, r *http.Request) {

@@ -28,6 +28,7 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/gateway"
 	"github.com/trustypangolin/mcp-broker/internal/identity"
 	"github.com/trustypangolin/mcp-broker/internal/server"
+	"github.com/trustypangolin/mcp-broker/internal/skillgen"
 )
 
 //go:embed web
@@ -48,6 +49,8 @@ type Backend interface {
 	Discover(ctx context.Context, connector, agent string) (gateway.ToolList, error)
 	// BrokerContextBytes is what agent's context holds before it loads a connector.
 	BrokerContextBytes(agent string) int
+	// AgentSkills gathers agent's connectors for skills (starting them).
+	AgentSkills(ctx context.Context, agent string, opts gateway.SkillOptions) ([]skillgen.Connector, []gateway.SkillConnector)
 }
 
 const (
@@ -234,6 +237,8 @@ func (d *Dashboard) Mount(mux *http.ServeMux) {
 	mux.Handle("DELETE /ui/api/agents/{name}", d.api(admin, d.deleteAgent))
 	mux.Handle("POST /ui/api/agents/{name}/tokens", d.api(admin, d.createToken))
 	mux.Handle("GET /ui/api/agents/{name}/client-config", d.api(admin, d.clientConfig))
+	mux.Handle("POST /ui/api/skills", d.api(admin, d.skills))
+	mux.Handle("GET /ui/api/skills/formats", d.api(admin, d.skillFormats))
 	mux.Handle("DELETE /ui/api/tokens/{id}", d.api(admin, d.revokeToken))
 	mux.Handle("GET /ui/api/config", d.api(admin, d.getConfig))
 	mux.Handle("POST /ui/api/config/check", d.api(admin, d.checkConfig))

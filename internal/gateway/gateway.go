@@ -473,7 +473,7 @@ func summarize(desc string) string {
 		s = s[:i]
 	}
 	for i := 0; i+1 < len(s); i++ {
-		if (s[i] == '.' || s[i] == '!' || s[i] == '?') && s[i+1] == ' ' {
+		if (s[i] == '.' || s[i] == '!' || s[i] == '?') && s[i+1] == ' ' && !abbreviation(s, i) {
 			s = s[:i+1]
 			break
 		}
@@ -482,6 +482,21 @@ func summarize(desc string) string {
 		s = strings.TrimRight(string(r[:summaryMax-1]), " ,;:") + "…"
 	}
 	return s
+}
+
+// abbreviation reports whether the full stop at s[i] ends an abbreviation such as "e.g."
+// rather than a sentence: cutting "Run a command, e.g. execute {...}" at "e.g." leaves a
+// summary that stops mid-thought.
+func abbreviation(s string, i int) bool {
+	if s[i] != '.' {
+		return false
+	}
+	start := strings.LastIndexAny(s[:i], " ([") + 1
+	switch strings.ToLower(s[start:i]) {
+	case "e.g", "i.e", "eg", "ie", "vs", "approx", "incl", "cf", "no", "ca":
+		return true
+	}
+	return false
 }
 
 // summaryNext tells the agent how to go on from a summary.

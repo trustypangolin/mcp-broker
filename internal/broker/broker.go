@@ -29,6 +29,7 @@ import (
 	"github.com/trustypangolin/mcp-broker/internal/proc"
 	"github.com/trustypangolin/mcp-broker/internal/redact"
 	"github.com/trustypangolin/mcp-broker/internal/server"
+	"github.com/trustypangolin/mcp-broker/internal/skillgen"
 	"github.com/trustypangolin/mcp-broker/internal/supervisor"
 	"github.com/trustypangolin/mcp-broker/internal/version"
 )
@@ -358,6 +359,11 @@ func (b *Broker) BrokerContextBytes(agent string) int { return b.gw.BrokerContex
 // Discover starts a connector to list its tools, for the dashboard.
 func (b *Broker) Discover(ctx context.Context, connector, agent string) (gateway.ToolList, error) {
 	return b.gw.Discover(ctx, connector, agent)
+}
+
+// AgentSkills generates agent's connector skills, for the dashboard's download.
+func (b *Broker) AgentSkills(ctx context.Context, agent string, opts gateway.SkillOptions) ([]skillgen.Connector, []gateway.SkillConnector) {
+	return b.gw.AgentSkills(ctx, agent, opts)
 }
 
 // Supervisor implements server.Control.

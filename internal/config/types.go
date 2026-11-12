@@ -70,7 +70,13 @@ type Agent struct {
 	Role      string    `yaml:"role"`
 	Match     Match     `yaml:"match"`
 	Approvals []Channel `yaml:"approvals"`
+	// MCP false turns the MCP endpoint (/mcp) off for this agent: it uses the HTTP API
+	// (/api/v1) and the generated skills instead. Unset means on.
+	MCP *bool `yaml:"mcp"`
 }
+
+// MCPOff reports whether the agent is refused on /mcp (mcp: false).
+func (a Agent) MCPOff() bool { return a.MCP != nil && !*a.MCP }
 
 type Match struct {
 	Process []string `yaml:"process"`

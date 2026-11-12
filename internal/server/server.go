@@ -38,7 +38,8 @@ type Options struct {
 
 type identKey struct{}
 
-// Handler returns the broker's HTTP handler: /mcp (MCP Streamable HTTP) and /healthz.
+// Handler returns the broker's HTTP handler: /mcp (MCP Streamable HTTP), /api/v1 (the same
+// meta-tools as plain HTTP + JSON) and /healthz.
 func Handler(o Options) http.Handler {
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.DiscardHandler)
@@ -66,8 +67,9 @@ func Handler(o Options) http.Handler {
 
 	g := &gate{o: o, refusals: map[string]time.Time{}}
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", g.identify(bound))
+	mux.Handle("/mcp", g.identify(g.mcpOn(bound)))
 	mux.HandleFunc("/healthz", g.health)
+	g.mountAPI(mux)
 	if o.Admin != nil {
 		MountAdmin(mux, *o.Admin)
 	}
@@ -128,6 +130,20 @@ func (g *gate) identify(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identKey{}, id)))
+	})
+}
+
+// mcpOn refuses /mcp to an agent whose config says mcp: false. Its token still works on
+// /api/v1, which is the point: such an agent is meant to use the HTTP API and skills.
+func (g *gate) mcpOn(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, _ := r.Context().Value(identKey{}).(identity.Identity)
+		if a, ok := g.o.Identifier.Config().Agents[id.Agent]; ok && a.MCPOff() {
+			g.refused(id.Source, &identity.Error{Status: http.StatusForbidden, Detail: "MCP is off for agent " + id.Agent})
+			http.Error(w, "MCP is turned off for agent "+id.Agent+": use the HTTP API at /api/v1 (guide: /api/v1/skill.md)", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

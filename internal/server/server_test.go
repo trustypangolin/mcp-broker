@@ -67,7 +67,9 @@ func newFixture(t *testing.T) *fixture {
 	}
 	f := &fixture{tokens: map[string]string{}, audit: filepath.Join(dir, "audit.jsonl")}
 	for _, a := range []string{"alpha", "beta", "pinned"} {
-		f.tokens[a], _, _ = store.Create(a, "")
+		if f.tokens[a], _, err = store.Create(a, ""); err != nil {
+			t.Fatalf("token for %s: %v", a, err)
+		}
 	}
 	red := redact.New()
 	aud, _ := audit.Open(f.audit, red)

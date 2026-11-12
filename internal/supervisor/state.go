@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/trustypangolin/mcp-broker/internal/atomicfile"
 	"github.com/trustypangolin/mcp-broker/internal/audit"
 	"github.com/trustypangolin/mcp-broker/internal/proc"
 )
@@ -40,7 +41,7 @@ func (s *Supervisor) saveState() {
 		s.log.Warn("writing run state", "err", err)
 		return
 	}
-	if err := os.Rename(tmp, s.opts.StateFile); err != nil {
+	if err := atomicfile.Rename(tmp, s.opts.StateFile); err != nil {
 		s.log.Warn("writing run state", "err", err)
 	}
 }

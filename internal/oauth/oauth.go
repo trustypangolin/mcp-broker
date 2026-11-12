@@ -28,6 +28,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 	"golang.org/x/oauth2"
 
+	"github.com/trustypangolin/mcp-broker/internal/atomicfile"
 	"github.com/trustypangolin/mcp-broker/internal/config"
 )
 
@@ -499,7 +500,7 @@ func writeFile(dir, path string, b []byte) error {
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return atomicfile.Rename(tmp, path)
 }
 
 // Callback handles the browser's return from the authorization server.

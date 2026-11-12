@@ -33,6 +33,18 @@ stdio shim (`mcp-broker connect --agent NAME`) to Streamable HTTP on `:8765/mcp`
   (`Gateway.AgentDescription`; the dashboard flags these as "no description"). Test
   budgets cap the meta-tool context (3.1 KB all, 2.0 KB without profiles). Downstream MCP
   servers start lazily.
+- **HTTP API and skills (v1.2.0):** `/api/v1` is the meta-tools as plain HTTP + JSON
+  (`server/api.go`), one endpoint per meta-tool through `Gateway.Invoke` (a session-less
+  `CallToolRequest`), so policy/approval/audit are the MCP path; 202 = pending approval,
+  `GET /api/v1/approvals/{id}?wait=N` long-polls. `mcp: false` on an agent refuses it on
+  `/mcp` only. The meta-skill is `skills/mcp-broker-api/SKILL.md` (embedded, served at
+  `/api/v1/skill.md`; `TestSkillDocumentsEveryRoute` keeps it in step with the routes).
+  `internal/skillgen` renders per-connector skills in 8 layouts (claude, claude-upload,
+  codex, agents-md, cursor, windsurf, copilot, gemini) for target `broker` (calls a broker
+  URL) or `direct` (server.json + bundled `mcp_call.py`/`.ps1`, no broker; never a secret
+  value: `${VAR}` placeholders). Dashboard: Agents → Skills… / API skill…; CLI:
+  `mcp-broker skill`; API: `POST /api/v1/skills`. JSON responses must carry
+  `charset=utf-8` (PowerShell 5.1 reads bare JSON as Latin-1).
 - **Approvals:** elicitation (owner agents only), tray notification, dashboard. The first
   real answer wins, a timeout denies, and each approval is single use and bound to the exact
   call. An elicitation decline/cancel (VS Code declines instantly without showing anything)
@@ -92,6 +104,8 @@ stdio shim (`mcp-broker connect --agent NAME`) to Streamable HTTP on `:8765/mcp`
 | `tray` | pure Win32 via x/sys (no CGO): icon drawn in code, menu, balloons, autostart (HKCU Run), elevated firewall script, `update_windows.go` |
 | `update` | self-update: GitHub release list (pre-releases on), semver + git-describe compare (`dev` builds get no checker), download + `checksums.txt` check, rename-swap of both programs with rollback, `Cleanup` of `*.old-*`. `MCP_BROKER_UPDATE_API` points it at a fake API for tests. Tray checks 30 s after start then every 6 h; restarts via `proc.StartDetached` (CREATE_BREAKAWAY_FROM_JOB; the tray's self-job has BREAKAWAY_OK) with `-wait-pid <old> -updated-from <ver>`. **Keep those tray flags working in every release**, or the update into it fails to start |
 | `importer` | read client configs (Claude Desktop Store build: `%LOCALAPPDATA%\Packages\Claude_*\LocalCache\Roaming\Claude\`; `~/.claude.json` and its projects' `.mcp.json`/`.vscode`/`.cursor`; VS Code JSONC; Cursor; Codex TOML; Gemini; Windsurf; bare servers object), from paths or bytes. Plan compares what actually runs: identical servers are left alone, a differing env/header/option becomes a variant named after the difference in the original's group, an unrelated name clash is renamed. Windows paths split on every OS. Apply (secrets → `secrets/<name>.env`), switch clients |
+| `skillgen` | renders skills and lays them out per agent type; embeds `scripts/mcp_call.py` and `mcp_call.ps1` (stdlib-only MCP clients, stdio + Streamable HTTP, `--steps`). Gateway's `AgentSkills`/`directSpec` (`gateway/skills.go`) gather the data |
+| `atomicfile` | `Rename` retries Windows sharing/access-denied errors (scanners holding a fresh file) for ~1 s; used by every temp-file-then-rename save |
 | `version` | link-time build metadata |
 | `testutil` | `alive`, `fakemcp` test helpers |
 

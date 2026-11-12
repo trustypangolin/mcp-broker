@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/trustypangolin/mcp-broker/internal/atomicfile"
 	"github.com/trustypangolin/mcp-broker/internal/audit"
 	"github.com/trustypangolin/mcp-broker/internal/policy"
 )
@@ -141,7 +142,7 @@ func (g *Gateway) remember(name string, tools []*mcp.Tool, server *ServerMeta) {
 		os.MkdirAll(filepath.Dir(g.opts.ToolCache), 0o700)
 		tmp := g.opts.ToolCache + ".tmp"
 		if err = os.WriteFile(tmp, data, 0o600); err == nil {
-			err = os.Rename(tmp, g.opts.ToolCache)
+			err = atomicfile.Rename(tmp, g.opts.ToolCache)
 		}
 	}
 	if err != nil {
@@ -191,26 +192,36 @@ func (g *Gateway) Tools(name string) ToolList {
 // Discover starts a connector, as agent's instance when it runs one per agent, so its tools
 // can be listed and set up before any agent calls it. The idle timer stops it again.
 func (g *Gateway) Discover(ctx context.Context, name, agent string) (ToolList, error) {
+	sess, tools, err := g.start(ctx, name, agent, "loaded from the dashboard")
+	if err != nil {
+		return ToolList{}, err
+	}
+	return ToolList{Tools: metaOf(tools), Server: sessionMeta(sess), Seen: time.Now().UTC(), Live: true}, nil
+}
+
+// start runs a connector outside an agent's call (dashboard, skill generation) and returns
+// its full tool definitions; why says what started it in the audit log.
+func (g *Gateway) start(ctx context.Context, name, agent, why string) (*mcp.ClientSession, []*mcp.Tool, error) {
 	d, ok := g.conn(name, agent)
 	if !ok {
-		return ToolList{}, fmt.Errorf("no connector %s", name)
+		return nil, nil, fmt.Errorf("no connector %s", name)
 	}
 	start := time.Now()
 	wasLoaded := d.loaded()
 	if err := d.ensure(ctx); err != nil {
 		msg := g.red.String(err.Error())
-		g.write(audit.Event{Kind: audit.KindProcessStart, Connector: d.key, Error: msg, Detail: "loaded from the dashboard", DurationMS: time.Since(start).Milliseconds()})
-		return ToolList{}, fmt.Errorf("%s", msg)
+		g.write(audit.Event{Kind: audit.KindProcessStart, Connector: d.key, Error: msg, Detail: why, DurationMS: time.Since(start).Milliseconds()})
+		return nil, nil, fmt.Errorf("%s", msg)
 	}
 	if !wasLoaded {
-		e := audit.Event{Kind: audit.KindProcessStart, Connector: d.key, Detail: "loaded from the dashboard", DurationMS: time.Since(start).Milliseconds()}
+		e := audit.Event{Kind: audit.KindProcessStart, Connector: d.key, Detail: why, DurationMS: time.Since(start).Milliseconds()}
 		if p := d.process(); p != nil {
 			e.PID = p.PID()
 		}
 		g.write(e)
 	}
 	sess, tools := d.snapshot()
-	return ToolList{Tools: metaOf(tools), Server: sessionMeta(sess), Seen: time.Now().UTC(), Live: true}, nil
+	return sess, tools, nil
 }
 
 func sessionMeta(sess *mcp.ClientSession) *ServerMeta {
