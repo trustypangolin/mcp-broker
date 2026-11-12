@@ -98,9 +98,10 @@ type File struct {
 
 // FormatInfo describes an output format.
 type FormatInfo struct {
-	ID, Title string
+	ID    string `json:"id"`
+	Title string `json:"title"`
 	// Install says where the files go, for the README and the dashboard.
-	Install string
+	Install string `json:"install"`
 }
 
 // Formats are the layouts Build can produce.

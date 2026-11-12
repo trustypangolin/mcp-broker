@@ -388,8 +388,17 @@ func TestAgentSkillsDownload(t *testing.T) {
 		t.Errorf("meta-only zip: %v", names)
 	}
 
-	if st, out := f.do("GET", "/ui/api/skills/formats", nil, nil); st != 200 || len(out["formats"].([]any)) != len(skillgen.Formats) {
-		t.Errorf("formats: %d %v", st, out)
+	// The dialog reads id, title and install: without them its options are blank.
+	st, out := f.do("GET", "/ui/api/skills/formats", nil, nil)
+	fmts, _ := out["formats"].([]any)
+	if st != 200 || len(fmts) != len(skillgen.Formats) {
+		t.Fatalf("formats: %d %v", st, out)
+	}
+	for _, x := range fmts {
+		m := x.(map[string]any)
+		if m["id"] == nil || m["id"] == "" || m["title"] == nil || m["title"] == "" || m["install"] == nil || m["install"] == "" {
+			t.Errorf("format entry lacks id/title/install: %v", m)
+		}
 	}
 	// Writes need the CSRF header; unknown agents and formats are refused.
 	if st, _ := f.do("POST", "/ui/api/skills?agent=vscode", nil, map[string]string{"X-Mcpb": ""}); st != http.StatusForbidden {
