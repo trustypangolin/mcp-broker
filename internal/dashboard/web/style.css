@@ -143,3 +143,15 @@ header .brand { flex: 0 0 auto; }
 
 /* client config dialog */
 pre.snippet { max-height: 42vh; overflow: auto; white-space: pre; word-break: normal; user-select: all; }
+
+/* skills dialog: connector tree */
+input[type=search] { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); margin-top: 6px; }
+.skill-tree { max-height: 42vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; margin-top: 6px; }
+.skill-tree .group > .fold-head { margin-bottom: 2px; }
+.skill-tree .group > .fold-head .row > input { margin: 0; flex: none; width: auto; }
+/* display:flex on these would otherwise beat the hidden attribute the filter sets */
+.skill-tree [hidden] { display: none !important; }
+.skill-row { display: flex; gap: 8px; align-items: center; font-weight: normal; margin: 0; padding: 3px 0; min-width: 0; }
+.skill-row input { margin: 0; flex: none; }
+.skill-row .skill-name { white-space: nowrap; }
+.skill-row .skill-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-size: .9em; }

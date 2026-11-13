@@ -1016,8 +1016,78 @@ async function skillsDialog(agent, visible, mcpOff) {
   const base = h("input", { value: location.origin + "/api/v1" });
   const portable = h("input", { type: "checkbox" });
   const meta = h("input", { type: "checkbox", checked: true });
+  // The agent's connectors as a tree under their dashboard groups: each group folds and has
+  // a tick box for all its members, and a filter narrows the tree by name, group, alias or
+  // description. All / None and a group's tick box act on what the filter shows.
+  const byName = {};
+  if (agent) {
+    for (const c of (await api("GET", "connectors")).connectors) byName[c.name] = c;
+  }
   const boxes = (visible || []).map((c) => h("input", { type: "checkbox", value: c, checked: true }));
-  const all = (on) => boxes.forEach((b) => { b.checked = on; });
+  const rows = new Map(); // tick box -> its row
+  const shown = (b) => !rows.get(b) || !rows.get(b).hidden;
+  const groupsUI = [];
+  const count = h("span", { class: "muted" });
+  const sync = () => {
+    for (const g of groupsUI) {
+      const n = g.members.filter((b) => b.checked).length;
+      g.box.checked = n === g.members.length;
+      g.box.indeterminate = n > 0 && n < g.members.length;
+      g.count.textContent = n + "/" + g.members.length;
+    }
+    count.textContent = boxes.filter((b) => b.checked).length + " of " + boxes.length + " selected";
+  };
+  const all = (on) => { boxes.forEach((b) => { if (shown(b)) b.checked = on; }); sync(); };
+  const tree = h("div", { class: "skill-tree" });
+  const grouped = new Map();
+  for (const b of boxes) {
+    const c = byName[b.value];
+    const g = (c && c.def && c.def.group) || "";
+    if (!grouped.has(g)) grouped.set(g, []);
+    grouped.get(g).push(b);
+  }
+  const groupNames = [...grouped.keys()].filter(Boolean).sort((a, b) => a.localeCompare(b));
+  if (grouped.has("")) groupNames.push("");
+  for (const g of groupNames) {
+    const members = grouped.get(g);
+    const ui = { members, count: h("span", { class: "muted" }) };
+    ui.box = h("input", { type: "checkbox", title: "Tick or untick every connector in " + (g || "Ungrouped"),
+      onchange: (ev) => { members.forEach((b) => { if (shown(b)) b.checked = ev.target.checked; }); sync(); } });
+    const memberRows = members.map((b) => {
+      const c = byName[b.value] || {};
+      const row = h("label", { class: "skill-row" }, b, h("span", { class: "skill-name" }, b.value),
+        h("span", { class: "muted skill-desc", title: c.agent_description || "" }, c.agent_description || ""));
+      rows.set(b, row);
+      return row;
+    });
+    const head = h("div", { class: "row grow" }, ui.box, h("span", { class: "group-name" }, g || "Ungrouped"), ui.count);
+    ui.el = fold("skills:group:" + g, false, "group", head, memberRows);
+    groupsUI.push(ui);
+    tree.append(ui.el);
+  }
+  boxes.forEach((b) => b.addEventListener("change", sync));
+  const filter = h("input", { type: "search", placeholder: "Filter by name, group, alias or description" });
+  filter.addEventListener("input", () => {
+    const q = filter.value.trim().toLowerCase();
+    for (const g of groupsUI) {
+      let hits = 0;
+      for (const b of g.members) {
+        const c = byName[b.value] || {};
+        const d = c.def || {};
+        const hay = [b.value, d.group, c.agent_description, ...(d.aliases || [])].join(" ").toLowerCase();
+        const hit = !q || hay.includes(q);
+        rows.get(b).hidden = !hit;
+        if (hit) hits++;
+      }
+      g.el.hidden = hits === 0;
+      if (q && hits) {
+        // Show the matches without changing the group's remembered fold state.
+        g.el.classList.remove("folded");
+        g.el.querySelector(":scope > .fold-body").hidden = false;
+      }
+    }
+  });
+  sync();
   const install = h("div", { class: "hint" });
   const targetHint = h("div", { class: "hint" });
   const brokerOnly = h("div", {},
@@ -1049,8 +1119,11 @@ async function skillsDialog(agent, visible, mcpOff) {
       targetHint,
       brokerOnly,
       agent && [
-        h("div", { class: "row", style: "margin-top:10px" }, h("b", {}, "Connectors "), h("button", { class: "link", onclick: () => all(true) }, "All"), h("button", { class: "link", onclick: () => all(false) }, "None")),
-        h("div", { class: "checks" }, boxes.map((b) => h("label", {}, b, b.value))),
+        h("div", { class: "row", style: "margin-top:10px" }, h("b", {}, "Connectors"), count, h("span", { class: "grow" }),
+          h("button", { class: "link", onclick: () => all(true) }, "All"), h("button", { class: "link", onclick: () => all(false) }, "None"),
+          h("button", { class: "link", onclick: () => foldAll(tree, false) }, "Expand"), h("button", { class: "link", onclick: () => foldAll(tree, true) }, "Collapse")),
+        filter,
+        tree,
         h("div", { class: "hint" }, "The broker starts each connector to read its tools and schemas; one that won't start gets the tool list it last had."),
         mcpOff === false && h("div", { class: "hint" }, "MCP is on for ", agent, ". That's fine: the skills work either way. To make it skills-only, untick MCP endpoint under Edit."),
       ],
