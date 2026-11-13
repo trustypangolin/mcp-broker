@@ -33,16 +33,16 @@ func TestExampleConfigLoads(t *testing.T) {
 	}
 
 	viewer := cfg.Roles["viewer"]
-	if viewer.Sees("imap", cfg.Connectors["imap"].Tags) {
+	if viewer.Sees("imap", cfg.Connectors["imap"]) {
 		t.Error("viewer must not see mail")
 	}
-	if !viewer.Sees("excel-live", cfg.Connectors["excel-live"].Tags) {
+	if !viewer.Sees("excel-live", cfg.Connectors["excel-live"]) {
 		t.Error("viewer should see excel-live")
 	}
-	if cfg.Roles["sandbox"].Sees("browser-control", cfg.Connectors["browser-control"].Tags) {
+	if cfg.Roles["sandbox"].Sees("browser-control", cfg.Connectors["browser-control"]) {
 		t.Error("sandbox must not see the browser")
 	}
-	if cfg.Roles[AnonymousRole].Sees("excel-live", nil) {
+	if cfg.Roles[AnonymousRole].Sees("excel-live", Connector{}) {
 		t.Error("anonymous must see nothing")
 	}
 }
@@ -266,7 +266,8 @@ func TestResolveRedactsSecrets(t *testing.T) {
 
 func TestRoleSeesLastMatchWins(t *testing.T) {
 	r := Role{Connectors: []string{"tag:office", "!word-live", "comfy*"}}
-	if !r.Sees("excel-live", []string{"office"}) || r.Sees("word-live", []string{"office"}) || !r.Sees("comfy", nil) || r.Sees("imap", []string{"mail"}) {
+	office := Connector{Tags: []string{"office"}}
+	if !r.Sees("excel-live", office) || r.Sees("word-live", office) || !r.Sees("comfy", Connector{}) || r.Sees("imap", Connector{Tags: []string{"mail"}}) {
 		t.Error("selector evaluation wrong")
 	}
 }

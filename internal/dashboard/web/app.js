@@ -233,6 +233,108 @@ function groupDialog(section, items, nameOf, opts = {}) {
   input.focus();
 }
 
+// connectorTree is connectors as a tick-box tree under their groups: each group folds and
+// has a tick box for its members (partly ticked when some are), and a filter narrows the
+// tree by name, group, alias, tag or description. All / None and a group's tick box act on
+// what the filter shows. items are {name, group, desc, aliases, tags}; opts.checked lists
+// the ticked names, opts.onchange runs after any change, opts.rowExtra(item) adds to a row,
+// and opts.key keeps each group's fold state apart from other trees.
+function connectorTree(items, opts = {}) {
+  const ticked = new Set(opts.checked || []);
+  const boxes = items.map((c) => h("input", { type: "checkbox", value: c.name, checked: ticked.has(c.name) }));
+  const itemOf = new Map(boxes.map((b, i) => [b, items[i]]));
+  const rows = new Map(); // tick box -> its row
+  const shown = (b) => !rows.get(b) || !rows.get(b).hidden;
+  const groupsUI = [];
+  const count = h("span", { class: "muted" });
+  const sync = () => {
+    for (const g of groupsUI) {
+      const n = g.members.filter((b) => b.checked).length;
+      g.box.checked = n === g.members.length;
+      g.box.indeterminate = n > 0 && n < g.members.length;
+      g.count.textContent = n + "/" + g.members.length;
+    }
+    count.textContent = boxes.filter((b) => b.checked).length + " of " + boxes.length + " selected";
+    if (opts.onchange) opts.onchange();
+  };
+  const all = (on) => { boxes.forEach((b) => { if (shown(b)) b.checked = on; }); sync(); };
+  const tree = h("div", { class: "skill-tree" });
+  const grouped = new Map();
+  for (const b of boxes) {
+    const g = itemOf.get(b).group || "";
+    if (!grouped.has(g)) grouped.set(g, []);
+    grouped.get(g).push(b);
+  }
+  const groupNames = [...grouped.keys()].filter(Boolean).sort((a, b) => a.localeCompare(b));
+  if (grouped.has("")) groupNames.push("");
+  for (const g of groupNames) {
+    const members = grouped.get(g);
+    const ui = { members, count: h("span", { class: "muted" }) };
+    ui.box = h("input", { type: "checkbox", title: "Tick or untick every connector in " + (g || "Ungrouped"),
+      onchange: (ev) => { members.forEach((b) => { if (shown(b)) b.checked = ev.target.checked; }); sync(); } });
+    const memberRows = members.map((b) => {
+      const c = itemOf.get(b);
+      const row = h("label", { class: "skill-row" }, b, h("span", { class: "skill-name" }, c.name),
+        (c.tags || []).map((t) => h("span", { class: "pill small", title: "Tag (roles can select tag:" + t + ")" }, t)),
+        opts.rowExtra && opts.rowExtra(c),
+        h("span", { class: "muted skill-desc", title: c.desc || "" }, c.desc || ""));
+      rows.set(b, row);
+      return row;
+    });
+    const head = h("div", { class: "row grow" }, ui.box, h("span", { class: "group-name" }, g || "Ungrouped"), ui.count);
+    ui.el = fold((opts.key || "tree") + ":group:" + g, false, "group", head, memberRows);
+    groupsUI.push(ui);
+    tree.append(ui.el);
+  }
+  if (!boxes.length) tree.append(h("div", { class: "muted", style: "padding:8px 0" }, "No connectors yet."));
+  boxes.forEach((b) => b.addEventListener("change", sync));
+  const filter = h("input", { type: "search", placeholder: "Filter by name, group, tag, alias or description" });
+  filter.addEventListener("input", () => {
+    const q = filter.value.trim().toLowerCase();
+    for (const g of groupsUI) {
+      let hits = 0;
+      for (const b of g.members) {
+        const c = itemOf.get(b);
+        const hay = [c.name, c.group, c.desc, ...(c.aliases || []), ...(c.tags || [])].join(" ").toLowerCase();
+        const hit = !q || hay.includes(q);
+        rows.get(b).hidden = !hit;
+        if (hit) hits++;
+      }
+      g.el.hidden = hits === 0;
+      if (q && hits) {
+        // Show the matches without changing the group's remembered fold state.
+        g.el.classList.remove("folded");
+        g.el.querySelector(":scope > .fold-body").hidden = false;
+      }
+    }
+  });
+  const toolbar = (title) => h("div", { class: "row", style: "margin-top:10px" }, h("b", {}, title), count, h("span", { class: "grow" }),
+    h("button", { class: "link", onclick: () => all(true) }, "All"), h("button", { class: "link", onclick: () => all(false) }, "None"),
+    h("button", { class: "link", onclick: () => foldAll(tree, false) }, "Expand"), h("button", { class: "link", onclick: () => foldAll(tree, true) }, "Collapse"));
+  sync();
+  return {
+    el: tree, filter, boxes, toolbar, rows,
+    selected: () => boxes.filter((b) => b.checked).map((b) => b.value),
+    set: (names) => { const s = new Set(names); boxes.forEach((b) => (b.checked = s.has(b.value))); sync(); },
+  };
+}
+
+// seesTree shows connectors (read-only) under their groups: one foldable line per group with
+// its connectors as pills. groupOf maps connector → group.
+function seesTree(key, names, groupOf) {
+  const byGroup = new Map();
+  for (const n of names) {
+    const g = groupOf[n] || "";
+    if (!byGroup.has(g)) byGroup.set(g, []);
+    byGroup.get(g).push(n);
+  }
+  const gs = [...byGroup.keys()].filter(Boolean).sort((a, b) => a.localeCompare(b));
+  if (byGroup.has("")) gs.push("");
+  return h("div", { class: "sees-tree" }, gs.map((g) => fold(key + ":" + g, false, "sees-group",
+    h("div", { class: "row" }, h("span", { class: "sees-name" }, g || "Ungrouped"), h("span", { class: "muted small" }, String(byGroup.get(g).length))),
+    h("div", { class: "sees-pills" }, byGroup.get(g).map((c) => h("span", { class: "pill" }, c))))));
+}
+
 // ---- state and routing ----
 
 let me = { admin: false };
@@ -253,6 +355,8 @@ async function refreshStatus() {
   const b = $("#pending-badge");
   b.hidden = !me.pending_approvals;
   b.textContent = me.pending_approvals;
+  // The tab title shows waiting approvals too, so they're seen from other tabs.
+  document.title = me.pending_approvals ? "(" + me.pending_approvals + ") Approval needed · mcp-broker" : "mcp-broker";
   for (const a of document.querySelectorAll("nav a[data-admin]")) a.hidden = !me.admin;
 }
 
@@ -322,10 +426,26 @@ pages.approvals = async (main) => {
           onclick: (ev) => decideAlways(ev.target, e),
         }, "Approve + always allow"),
         h("button", { class: "deny", onclick: (ev) => decide(ev.target, e.id, false) }, "Deny"),
-        h("span", { class: "muted grow" }, "expires " + new Date(e.expires).toLocaleTimeString()))));
+        h("span", { class: "muted grow countdown", "data-created": e.created, "data-expires": e.expires }, "expires " + new Date(e.expires).toLocaleTimeString())),
+      h("div", { class: "expiry-bar" }, h("div", { class: "expiry-fill", "data-created": e.created, "data-expires": e.expires }))));
+  const tickCountdowns = () => {
+    for (const el of main.querySelectorAll("[data-expires]")) {
+      const end = new Date(el.dataset.expires), start = new Date(el.dataset.created);
+      const left = Math.max(0, Math.round((end - Date.now()) / 1000));
+      const frac = Math.max(0, Math.min(1, (end - Date.now()) / (end - start)));
+      if (el.classList.contains("expiry-fill")) {
+        el.style.width = (frac * 100).toFixed(1) + "%";
+        el.classList.toggle("low", frac < 0.25);
+      } else {
+        el.textContent = left ? "expires in " + fmtSecs(left) + " (" + end.toLocaleTimeString() + "), then it is denied" : "expired";
+      }
+    }
+  };
+  const timing = me.admin ? await approvalTiming() : null;
   fill(main,
-    h("h2", {}, "Waiting for you"),
+    h("div", { class: "row spread" }, h("h2", {}, "Waiting for you"), browserAlertToggle()),
     cards.length ? cards : h("div", { class: "card empty" }, "Nothing waiting for approval."),
+    timing,
     decided.length > 0 && [
       h("h2", { style: "margin-top:24px" }, "Recently decided"),
       h("div", { class: "card table-wrap" }, h("table", {},
@@ -334,6 +454,8 @@ pages.approvals = async (main) => {
           h("td", {}, ago(e.created)), h("td", {}, e.agent), h("td", {}, e.summary),
           h("td", {}, h("span", { class: "pill " + (e.status === "approved" ? "allow" : "deny") }, e.status), e.channel && h("span", { class: "muted" }, " via " + e.channel))))))],
   );
+  tickCountdowns();
+  if (cards.length) pageTimer = setInterval(tickCountdowns, 1000);
 };
 
 async function decide(btn, id, approve) {
@@ -355,6 +477,165 @@ async function decideAlways(btn, e) {
   });
   refreshStatus();
   if (current === "approvals") route();
+}
+
+// fmtSecs writes seconds as 45s, 2m 5s or 1h 30m.
+function fmtSecs(n) {
+  n = Math.round(n);
+  if (n < 60) return n + "s";
+  if (n < 3600) return Math.floor(n / 60) + "m" + (n % 60 ? " " + (n % 60) + "s" : "");
+  return Math.floor(n / 3600) + "h" + (Math.floor(n % 3600 / 60) ? " " + Math.floor(n % 3600 / 60) + "m" : "");
+}
+
+// Browser alerts: an optional system notification from this tab when an approval arrives,
+// which stays up until dismissed. Whether it is on is a per-browser choice.
+const alertKey = "mcpb.browserAlerts";
+function browserAlertsOn() {
+  try {
+    return localStorage.getItem(alertKey) === "1" && "Notification" in window && Notification.permission === "granted";
+  } catch { return false; }
+}
+function browserAlertToggle() {
+  if (!("Notification" in window)) return null;
+  const box = h("input", { type: "checkbox", checked: browserAlertsOn() });
+  box.addEventListener("change", async () => {
+    if (box.checked && (await Notification.requestPermission()) !== "granted") {
+      box.checked = false;
+      toast("This browser won't show notifications for this page. Over plain HTTP from another computer, browsers only allow them for localhost.", true);
+    }
+    try { localStorage.setItem(alertKey, box.checked ? "1" : "0"); } catch { /* private window */ }
+  });
+  return h("label", { class: "inline-check", title: "Show a system notification from this browser when an approval arrives, even with this tab in the background. It stays until you dismiss it." },
+    box, "Alert me in this browser");
+}
+function browserAlert(e) {
+  if (e.status !== "pending" || !(e.channels || []).includes("dashboard") || !browserAlertsOn()) return;
+  try {
+    const n = new Notification("Approval needed: " + e.agent, { body: e.summary, tag: e.id, requireInteraction: true });
+    n.onclick = () => { window.focus(); location.hash = "approvals"; n.close(); };
+  } catch { /* some browsers only allow notifications from a service worker */ }
+}
+
+// approvalTiming is the Approvals page card that sets how long approvals wait, how agents
+// wait for them, and how often the tray reminds. It stays as it is while it has unsaved
+// edits, so a new approval re-drawing the page doesn't throw them away.
+let timingEl = null;
+async function approvalTiming() {
+  if (timingEl && timingEl.dataset.dirty === "1") return timingEl;
+  const { settings, defaults } = await api("GET", "settings/approvals");
+  const s = { ...settings };
+  const spec = [
+    { key: "timeout", label: "Time to answer", min: 10, max: 3600, step: 10, hardMax: 86400,
+      hint: "How long an approval waits for you. When it runs out, the call is denied.", presets: [60, 120, 300, 900, 3600] },
+    { key: "wait", label: "Each call waits", min: 1, max: 600, step: 1, hardMax: 600,
+      hint: "How long one agent call holds on for your answer before it returns \"pending\". Keep it under the agent app's own tool-call timeout, or the app gives up first.", presets: [15, 25, 45, 90] },
+    { key: "check_every", label: "Then agents check every", min: 1, max: 600, step: 1, hardMax: 86400,
+      hint: "Agents are told to pause this long between checks instead of calling again straight away. Each check also waits up to \"each call waits\" for your answer.", presets: [5, 15, 30, 60] },
+    { key: "remind", label: "Remind me every", min: 0, max: 900, step: 5, hardMax: 86400, off: true,
+      hint: "Shows the tray notification again while an approval waits. Off shows it once.", presets: [0, 30, 60, 120] },
+  ];
+  const ctl = {};
+  const err = h("div", { class: "error" });
+  const save = h("button", { class: "primary", disabled: true }, "Save and apply");
+  const summary = h("p", { class: "timeline-summary" });
+  const tl = h("div", { class: "timeline" });
+  const el = h("div", { class: "card" });
+  timingEl = el;
+
+  const problems = () => {
+    if (s.timeout < 1) return "Time to answer must be at least a second.";
+    if (s.wait < 1 || s.wait > 600) return "Each call waits between 1 second and 10 minutes.";
+    if (s.check_every < 1 || s.check_every > s.timeout) return "Agents check at least once before the approval expires: keep \"check every\" under the time to answer.";
+    if (s.remind && (s.remind < 10 || s.remind > s.timeout)) return "Reminders come at most every 10 seconds, and before the approval expires.";
+    return "";
+  };
+  const update = (fromUser) => {
+    for (const sp of spec) {
+      const c = ctl[sp.key];
+      c.range.value = Math.min(s[sp.key], sp.max);
+      if (document.activeElement !== c.num) c.num.value = s[sp.key];
+      c.text.textContent = sp.off && !s[sp.key] ? "off" : fmtSecs(s[sp.key]);
+      for (const b of c.chips) b.classList.toggle("on", Number(b.dataset.v) === s[sp.key]);
+    }
+    const p = problems();
+    err.textContent = p;
+    const changed = spec.some((sp) => s[sp.key] !== settings[sp.key]);
+    save.disabled = !!p || !changed;
+    el.dataset.dirty = changed ? "1" : "0";
+    if (fromUser !== false) drawTimeline();
+  };
+
+  const drawTimeline = () => {
+    const T = Math.max(s.timeout, 1), W = Math.max(Math.min(s.wait, T), 1), R = Math.max(s.check_every, 1);
+    const pct = (t) => (Math.min(t, T) / T * 100).toFixed(3) + "%";
+    const agentLane = h("div", { class: "tl-lane" });
+    let t = 0, calls = 0, drawn = 0;
+    while (t < T) {
+      calls++;
+      if (drawn < 120) {
+        agentLane.append(h("div", { class: "tl-block tl-wait" + (calls === 1 ? " first" : ""), style: "left:" + pct(t) + ";width:" + pct(Math.min(W, T - t)),
+          title: (calls === 1 ? "The call itself" : "Check " + (calls - 1)) + ": waits up to " + fmtSecs(Math.min(W, T - t)) + " for your answer (from " + fmtSecs(t) + ")" }));
+        drawn++;
+      }
+      t += W;
+      if (t >= T) break;
+      t += R;
+    }
+    const youLane = h("div", { class: "tl-lane" });
+    const bells = [0];
+    if (s.remind > 0) for (let k = s.remind; k < T - 2; k += s.remind) { bells.push(k); if (bells.length > 200) break; }
+    for (const b of bells) youLane.append(h("div", { class: "tl-bell" + (b ? " again" : ""), style: "left:" + pct(b), title: (b ? "Reminder" : "First notification") + " at " + fmtSecs(b) }));
+    youLane.append(h("div", { class: "tl-answer", style: "left:0;width:100%" }));
+    fill(tl,
+      h("div", { class: "tl-legend" },
+        h("span", {}, h("i", { class: "sw first" }), "the call waits for you"), h("span", {}, h("i", { class: "sw again" }), "a check, waiting again"),
+        h("span", {}, h("i", { class: "sw gap" }), "agent pauses"), h("span", {}, h("i", { class: "sw bell" }), "notification"),
+        h("span", {}, h("i", { class: "sw answer" }), "you can answer")),
+      h("div", { class: "tl-row" }, h("div", { class: "tl-label" }, "Agent"), agentLane),
+      h("div", { class: "tl-row" }, h("div", { class: "tl-label" }, "You"), youLane),
+      h("div", { class: "tl-row" }, h("div", { class: "tl-label" }), h("div", { class: "tl-axis" },
+        h("span", { style: "left:0" }, "0"), h("span", { style: "left:50%" }, fmtSecs(T / 2)),
+        h("span", { class: "tl-end", style: "left:100%" }, fmtSecs(T) + " · denied"))));
+    const remindText = s.remind > 0 ? "the tray notifies you " + bells.length + " time" + (bells.length > 1 ? "s" : "") + " (first, then every " + fmtSecs(s.remind) + ")" : "the tray notifies you once";
+    fill(summary,
+      "An agent's call waits ", h("b", {}, fmtSecs(W)), " for you. If you haven't answered, it gets \"pending\" and checks back every ",
+      h("b", {}, fmtSecs(R)), ", waiting up to ", fmtSecs(W), " each time: about ", h("b", {}, String(calls)), " call", calls > 1 ? "s" : "", " in all. Meanwhile ", remindText,
+      ". Answer any time in the shaded span; after ", h("b", {}, fmtSecs(T)), " the approval is denied.");
+  };
+
+  const rows = spec.map((sp) => {
+    const range = h("input", { type: "range", min: sp.min, max: sp.max, step: sp.step, "aria-label": sp.label });
+    const num = h("input", { type: "number", min: sp.min, max: sp.hardMax, step: 1, class: "num", "aria-label": sp.label + " in seconds" });
+    const text = h("span", { class: "tl-value" });
+    const chips = sp.presets.map((v) => h("button", { type: "button", class: "chip", "data-v": v, onclick: () => { s[sp.key] = v; update(); } }, sp.off && !v ? "Off" : fmtSecs(v)));
+    range.addEventListener("input", () => { s[sp.key] = Number(range.value); update(); });
+    num.addEventListener("input", () => { if (num.value !== "") { s[sp.key] = Math.max(0, Math.round(Number(num.value))); update(); } });
+    num.addEventListener("blur", () => update(false));
+    ctl[sp.key] = { range, num, text, chips };
+    return h("div", { class: "timing-row" },
+      h("div", { class: "timing-head" }, h("b", {}, sp.label), text),
+      h("div", { class: "timing-ctl" }, range, num, h("span", { class: "muted small" }, "s")),
+      h("div", { class: "row chips" }, chips),
+      h("div", { class: "hint" }, sp.hint));
+  });
+
+  save.addEventListener("click", (ev) => run(ev.target, async () => {
+    toast(reloadSummary(await api("PUT", "settings/approvals", s)));
+    el.dataset.dirty = "0";
+    route();
+  }));
+  const reset = h("button", { onclick: () => { Object.assign(s, defaults); update(); } }, "Defaults");
+  const undo = h("button", { onclick: () => { Object.assign(s, settings); update(); } }, "Undo changes");
+
+  fill(el, fold("approvals:timing", false, "", h("h3", {}, "Timing and reminders"), [
+    h("p", { class: "muted" }, "How long approvals wait for you, and how agents wait for your answer without failing or calling again and again. Changes apply at once."),
+    tl, summary,
+    h("div", { class: "timing-grid" }, rows),
+    h("div", { class: "hint" }, "Agents that ask inside their own app (elicitation) keep one call open for the whole time to answer instead."),
+    err,
+    h("div", { class: "row", style: "margin-top:10px" }, save, undo, reset)]));
+  update();
+  return el;
 }
 
 // ---- profiles ----
@@ -937,7 +1218,10 @@ pages.agents = async (main) => {
       a.def.match.process && a.def.match.process.length ? ["Process: ", a.def.match.process.map((p) => h("code", {}, p)), " "] : "Any process. ",
       a.def.match.from && a.def.match.from.length ? ["From: ", a.def.match.from.join(", "), ". "] : "",
       "Approvals via ", (a.def.approvals || []).join(", "), "."),
-    h("div", { class: "hint" }, "Sees: ", a.visible.length ? a.visible.map((c) => h("span", { class: "pill" }, c)) : "no connectors"),
+    h("div", { class: "sees" },
+      h("div", { class: "hint" }, "Sees ", a.visible.length ? a.visible.length + " connector" + (a.visible.length === 1 ? "" : "s") : "no connectors",
+        " through role ", h("a", { href: "#roles", onclick: () => setFolded("roles:" + a.def.role, false) }, a.def.role)),
+      a.visible.length > 0 && seesTree("agents:" + a.name, a.visible, data.connector_groups || {})),
     h("div", { style: "margin-top:8px" },
       h("b", {}, "Tokens "),
       a.tokens.length ? "" : h("span", { class: "warn" }, "none: this agent cannot connect yet"),
@@ -950,20 +1234,159 @@ pages.agents = async (main) => {
       h("button", { disabled: !a.visible.length, title: "Download skills that let this agent use its connectors over the HTTP API, without MCP", onclick: () => skillsDialog(a.name, a.visible, a.def.mcp === false) }, "Skills…"),
       h("button", { onclick: () => editAgent(a.name, a.def, roleNames, data.channels) }, "Edit"),
       h("button", { class: "danger", onclick: (ev) => removeAgent(ev.target, a.name) }, "Remove"))));
-  const roles = h("div", { class: "card table-wrap" }, h("table", {},
-    h("tr", {}, h("th", {}, "Role"), h("th", {}, "Connectors"), h("th", {}, "Classes")),
-    data.roles.map((r) => h("tr", {},
-      h("td", {}, h("b", {}, r.name)),
-      h("td", {}, r.connectors.length ? r.connectors.map((c) => h("span", { class: "pill" }, c)) : h("span", { class: "muted" }, "none")),
-      h("td", {}, data.classes.map((c) => r.classes && r.classes[c] ? h("span", { class: "pill " + r.classes[c] }, c + ": " + r.classes[c]) : null),
-        (r.rules || []).length > 0 && h("div", { class: "hint" }, r.rules.length + " rule(s)"))))));
   fill(main,
     h("div", { class: "row spread" }, h("h2", {}, "Agents"), h("div", { class: "row" }, h("button", { title: "Download the skill that teaches any agent the broker's HTTP API", onclick: () => skillsDialog(null) }, "API skill…"), h("button", { class: "primary", onclick: () => editAgent(null, { role: roleNames[0], match: {}, approvals: ["tray", "dashboard"] }, roleNames, data.channels) }, "Add agent"))),
     cards.length ? cards : h("div", { class: "card empty" }, "No agents yet."),
-    h("h2", { style: "margin-top:24px" }, "Roles"),
-    h("p", { class: "muted" }, "Edit roles in the Config tab. Connector selectors run in order and the last match wins; ! excludes."),
-    roles);
+    h("p", { class: "muted" }, "What an agent sees and may do comes from its role: ", h("a", { href: "#roles" }, "edit roles on the Roles tab"), "."));
 };
+
+// ---- roles ----
+
+// seg3 is an Allow / Ask / Deny switch held in the page until Save. A missing value is
+// Deny, as in the policy engine.
+function seg3(cur, onpick) {
+  const el = h("div", { class: "seg", role: "group" });
+  const draw = (v) => fill(el, ["allow", "approve", "deny"].map((a) => h("button", {
+    type: "button",
+    class: (v || "deny") === a ? "on " + a : "",
+    "aria-pressed": String((v || "deny") === a),
+    onclick: () => { draw(a); onpick(a); },
+  }, actLabel[a])));
+  draw(cur);
+  return el;
+}
+
+const classHelp = {
+  read: "Looks things up; changes nothing",
+  write: "Creates or changes things",
+  destructive: "Deletes or overwrites",
+  external: "Sends to people or the internet (mail, posts)",
+  spend: "Costs money",
+  exec: "Runs commands or code",
+};
+
+pages.roles = async (main) => {
+  const data = await api("GET", "roles");
+  const items = data.connectors.map((c) => ({ name: c.name, group: c.group, tags: c.tags, desc: c.description }));
+  fill(main,
+    h("div", { class: "row spread" }, h("h2", {}, "Roles"),
+      h("div", { class: "row" },
+        h("button", { class: "link", onclick: () => foldAll(main, true) }, "Collapse all"),
+        h("button", { class: "primary", onclick: () => addRole(data) }, "Add role"))),
+    h("p", { class: "muted" }, "A role decides which connectors its agents see and what each kind of call does. ",
+      "Tick connectors or whole groups on or off; a ticked group also covers connectors added to it later. ",
+      "Saving keeps selectors written by hand (such as ", h("code", {}, "!tag:mail"), ") and adds only the differences."),
+    // Built-in anonymous last; with several roles they start folded, showing just their heads.
+    [...data.roles].sort((a, b) => (a.builtin - b.builtin) || a.name.localeCompare(b.name))
+      .map((r) => roleCard(r, data, items, data.roles.length > 2)));
+};
+
+function roleCard(r, data, items, foldDefault) {
+  const before = { visible: new Set(r.visible), classes: { ...r.classes }, profiles: { ...r.profiles } };
+  const now = { classes: { ...r.classes }, profiles: { ...r.profiles } };
+  const save = h("button", { class: "primary", disabled: true }, "Save and apply");
+  const revert = h("button", { disabled: true, onclick: () => route() }, "Revert");
+  const changed = h("span", { class: "pill approve", hidden: true }, "unsaved");
+  const countPill = h("span", { class: "pill" });
+  const marks = new Map(); // connector → its "changed" mark
+  let ct = null; // the tree calls onchange while it is being built
+  const ctree = connectorTree(items, {
+    key: "roles:" + r.name,
+    checked: r.visible,
+    rowExtra: (c) => { const m = h("span", { class: "pill approve small", hidden: true }, ""); marks.set(c.name, m); return m; },
+    onchange: () => ct && dirty(),
+  });
+  ct = ctree;
+  dirty();
+  function dirty() {
+    const sel = new Set(ct.selected());
+    let diff = false;
+    for (const [n, m] of marks) {
+      const was = before.visible.has(n), is = sel.has(n);
+      m.hidden = was === is;
+      m.textContent = is ? "on" : "off";
+      if (was !== is) diff = true;
+    }
+    const same = (a, b) => JSON.stringify(Object.entries(a).filter(([, v]) => v !== "deny").sort()) === JSON.stringify(Object.entries(b).filter(([, v]) => v !== "deny").sort());
+    diff = diff || !same(before.classes, now.classes) || !same(before.profiles, now.profiles);
+    save.disabled = revert.disabled = !diff;
+    changed.hidden = !diff;
+    countPill.textContent = sel.size + "/" + items.length + " connectors";
+  }
+  save.addEventListener("click", (ev) => run(ev.target, async () => {
+    const body = { visible: ct.selected() };
+    // Only write keys that differ from the policy's default (deny), plus any the role had.
+    const keep = (m, had) => Object.fromEntries(Object.entries(m).filter(([k, v]) => v !== "deny" || k in had));
+    body.classes = keep(now.classes, before.classes);
+    if (data.has_profiles || Object.keys(before.profiles).length) body.profiles = keep(now.profiles, before.profiles);
+    toast(reloadSummary(await api("PUT", "roles/" + encodeURIComponent(r.name), body)));
+    route();
+  }));
+
+  const users = r.agents.length
+    ? r.agents.map((a) => h("span", { class: "pill" }, a))
+    : h("span", { class: "muted small" }, r.builtin ? "unidentified loopback connections" : "no agent uses this role");
+  const head = h("div", { class: "row grow" }, h("h3", {}, r.name), countPill, changed, h("span", { class: "muted small" }, "used by"), users);
+
+  const classes = h("div", { class: "seg-grid" }, data.classes.map((c) => [
+    h("div", {}, h("b", {}, c), h("div", { class: "hint" }, classHelp[c] || "")),
+    seg3(now.classes[c], (a) => { now.classes[c] = a; dirty(); }),
+  ]));
+  const profiles = (data.has_profiles || Object.keys(r.profiles).length > 0) && h("div", { class: "seg-grid" }, data.profile_actions.map((p) => [
+    h("div", {}, h("b", {}, p), p === "kill_foreign" && h("div", { class: "hint" }, "Always asks, whatever this says")),
+    seg3(now.profiles[p], (a) => { now.profiles[p] = a; dirty(); }),
+  ]));
+
+  const body = [
+    h("div", { class: "role-cols" },
+      h("div", { class: "role-tree" }, ct.toolbar("Connectors this role sees"), ct.filter, ct.el),
+      h("div", { class: "role-side" },
+        h("b", {}, "What calls do"),
+        h("div", { class: "hint" }, "Ask means the user approves each call. Floors and per-tool rules can make a call stricter."),
+        classes,
+        profiles && [h("b", { style: "display:block;margin-top:12px" }, "App profiles"), profiles],
+        h("div", { style: "margin-top:12px" }, h("b", {}, "Per-tool rules "), h("span", { class: "muted" }, String(r.rules.length)),
+          r.rules.length > 0 && h("div", { class: "rule-list" }, r.rules.map((x) => h("div", {}, h("code", {}, x.match), " → ", h("span", { class: "pill " + x.action }, actLabel[x.action])))),
+          h("div", { class: "hint" }, "Set them per tool on the ", h("a", { href: "#tools" }, "Tools"), " tab.")),
+        h("div", { style: "margin-top:12px" }, h("b", {}, "Selectors in broker.yaml"),
+          h("div", {}, r.connectors.length ? r.connectors.map((s) => h("code", { class: "sel" }, s)) : h("span", { class: "muted" }, "none: sees nothing")),
+          h("div", { class: "hint" }, "Read in order; the last match wins. ! excludes; tag: and group: select by tag or group.")))),
+    h("div", { class: "row", style: "margin-top:12px" },
+      save, revert, h("span", { class: "grow" }),
+      h("button", { onclick: () => addRole(data, r) }, "Duplicate"),
+      h("button", {
+        class: "danger", disabled: r.builtin || r.agents.length > 0 || undefined,
+        title: r.builtin ? "Built in" : r.agents.length ? "Give " + r.agents.join(", ") + " another role first" : "Remove this role",
+        onclick: (ev) => confirm("Remove role " + r.name + "?") && run(ev.target, async () => { toast(reloadSummary(await api("DELETE", "roles/" + encodeURIComponent(r.name)))); route(); }),
+      }, "Remove")),
+  ];
+  return fold("roles:" + r.name, foldDefault, "card role-card", head, body);
+}
+
+// addRole creates a role, empty or as a copy of from (its selectors, classes and profile
+// actions; per-tool rules are not copied).
+function addRole(data, from) {
+  const name = h("input", { placeholder: "reviewer", value: from ? from.name + "-copy" : "" });
+  const copy = h("select", {}, h("option", { value: "" }, "Nothing (sees no connectors, every call denied)"),
+    data.roles.map((r) => h("option", { value: r.name, selected: from && from.name === r.name }, r.name)));
+  dialog("Add role", h("div", {},
+    field("Name", name, "Letters, digits, '.', '_' and '-'."),
+    field("Start from", copy, "Copies the connectors it sees and what calls do. Per-tool rules are not copied.")),
+  (close) => [
+    h("button", { onclick: close }, "Cancel"),
+    h("button", { class: "primary", onclick: (ev) => run(ev.target, async () => {
+      const n = name.value.trim();
+      if (!n) throw new Error("Give the role a name.");
+      const src = data.roles.find((r) => r.name === copy.value);
+      const body = src ? { connectors: src.connectors, classes: src.classes, profiles: src.profiles } : { connectors: [] };
+      toast(reloadSummary(await api("PUT", "roles/" + encodeURIComponent(n) + "?new=1", body)));
+      setFolded("roles:" + n, false);
+      close();
+      location.hash = "roles";
+      route();
+    }) }, "Create")]);
+  name.focus();
+}
 
 function editAgent(name, def, roles, channels) {
   const f = {
@@ -1016,78 +1439,16 @@ async function skillsDialog(agent, visible, mcpOff) {
   const base = h("input", { value: location.origin + "/api/v1" });
   const portable = h("input", { type: "checkbox" });
   const meta = h("input", { type: "checkbox", checked: true });
-  // The agent's connectors as a tree under their dashboard groups: each group folds and has
-  // a tick box for all its members, and a filter narrows the tree by name, group, alias or
-  // description. All / None and a group's tick box act on what the filter shows.
-  const byName = {};
+  let ct;
   if (agent) {
+    const byName = {};
     for (const c of (await api("GET", "connectors")).connectors) byName[c.name] = c;
+    ct = connectorTree((visible || []).map((n) => {
+      const c = byName[n] || {};
+      const d = c.def || {};
+      return { name: n, group: d.group, desc: c.agent_description, aliases: d.aliases, tags: d.tags };
+    }), { key: "skills", checked: visible || [] });
   }
-  const boxes = (visible || []).map((c) => h("input", { type: "checkbox", value: c, checked: true }));
-  const rows = new Map(); // tick box -> its row
-  const shown = (b) => !rows.get(b) || !rows.get(b).hidden;
-  const groupsUI = [];
-  const count = h("span", { class: "muted" });
-  const sync = () => {
-    for (const g of groupsUI) {
-      const n = g.members.filter((b) => b.checked).length;
-      g.box.checked = n === g.members.length;
-      g.box.indeterminate = n > 0 && n < g.members.length;
-      g.count.textContent = n + "/" + g.members.length;
-    }
-    count.textContent = boxes.filter((b) => b.checked).length + " of " + boxes.length + " selected";
-  };
-  const all = (on) => { boxes.forEach((b) => { if (shown(b)) b.checked = on; }); sync(); };
-  const tree = h("div", { class: "skill-tree" });
-  const grouped = new Map();
-  for (const b of boxes) {
-    const c = byName[b.value];
-    const g = (c && c.def && c.def.group) || "";
-    if (!grouped.has(g)) grouped.set(g, []);
-    grouped.get(g).push(b);
-  }
-  const groupNames = [...grouped.keys()].filter(Boolean).sort((a, b) => a.localeCompare(b));
-  if (grouped.has("")) groupNames.push("");
-  for (const g of groupNames) {
-    const members = grouped.get(g);
-    const ui = { members, count: h("span", { class: "muted" }) };
-    ui.box = h("input", { type: "checkbox", title: "Tick or untick every connector in " + (g || "Ungrouped"),
-      onchange: (ev) => { members.forEach((b) => { if (shown(b)) b.checked = ev.target.checked; }); sync(); } });
-    const memberRows = members.map((b) => {
-      const c = byName[b.value] || {};
-      const row = h("label", { class: "skill-row" }, b, h("span", { class: "skill-name" }, b.value),
-        h("span", { class: "muted skill-desc", title: c.agent_description || "" }, c.agent_description || ""));
-      rows.set(b, row);
-      return row;
-    });
-    const head = h("div", { class: "row grow" }, ui.box, h("span", { class: "group-name" }, g || "Ungrouped"), ui.count);
-    ui.el = fold("skills:group:" + g, false, "group", head, memberRows);
-    groupsUI.push(ui);
-    tree.append(ui.el);
-  }
-  boxes.forEach((b) => b.addEventListener("change", sync));
-  const filter = h("input", { type: "search", placeholder: "Filter by name, group, alias or description" });
-  filter.addEventListener("input", () => {
-    const q = filter.value.trim().toLowerCase();
-    for (const g of groupsUI) {
-      let hits = 0;
-      for (const b of g.members) {
-        const c = byName[b.value] || {};
-        const d = c.def || {};
-        const hay = [b.value, d.group, c.agent_description, ...(d.aliases || [])].join(" ").toLowerCase();
-        const hit = !q || hay.includes(q);
-        rows.get(b).hidden = !hit;
-        if (hit) hits++;
-      }
-      g.el.hidden = hits === 0;
-      if (q && hits) {
-        // Show the matches without changing the group's remembered fold state.
-        g.el.classList.remove("folded");
-        g.el.querySelector(":scope > .fold-body").hidden = false;
-      }
-    }
-  });
-  sync();
   const install = h("div", { class: "hint" });
   const targetHint = h("div", { class: "hint" });
   const brokerOnly = h("div", {},
@@ -1119,11 +1480,9 @@ async function skillsDialog(agent, visible, mcpOff) {
       targetHint,
       brokerOnly,
       agent && [
-        h("div", { class: "row", style: "margin-top:10px" }, h("b", {}, "Connectors"), count, h("span", { class: "grow" }),
-          h("button", { class: "link", onclick: () => all(true) }, "All"), h("button", { class: "link", onclick: () => all(false) }, "None"),
-          h("button", { class: "link", onclick: () => foldAll(tree, false) }, "Expand"), h("button", { class: "link", onclick: () => foldAll(tree, true) }, "Collapse")),
-        filter,
-        tree,
+        ct.toolbar("Connectors"),
+        ct.filter,
+        ct.el,
         h("div", { class: "hint" }, "The broker starts each connector to read its tools and schemas; one that won't start gets the tool list it last had."),
         mcpOff === false && h("div", { class: "hint" }, "MCP is on for ", agent, ". That's fine: the skills work either way. To make it skills-only, untick MCP endpoint under Edit."),
       ],
@@ -1137,10 +1496,10 @@ async function skillsDialog(agent, visible, mcpOff) {
           if (portable.checked) p.set("portable", "1");
         }
         if (agent) {
-          const picked = boxes.filter((b) => b.checked).map((b) => b.value);
+          const picked = ct.selected();
           if (!picked.length && (!meta.checked || target.value === "direct")) throw new Error("Pick at least one connector.");
           p.set("agent", agent);
-          p.set("connectors", picked.length === boxes.length ? "" : picked.length ? picked.join(",") : "none");
+          p.set("connectors", picked.length === ct.boxes.length ? "" : picked.length ? picked.join(",") : "none");
           if (!meta.checked) p.set("meta", "0");
           fill(out, h("div", { class: "hint" }, "Starting ", picked.length, " connector(s) and writing skills…"));
         }
@@ -1530,7 +1889,8 @@ pages.audit = async (main) => {
 
 function listen() {
   const es = new EventSource("/ui/api/events");
-  es.addEventListener("approval", () => {
+  es.addEventListener("approval", (ev) => {
+    try { browserAlert(JSON.parse(ev.data)); } catch { /* not an entry */ }
     refreshStatus();
     if (current === "approvals") route();
   });

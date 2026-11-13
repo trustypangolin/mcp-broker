@@ -25,6 +25,9 @@ dashboard:
 
 approvals:
   timeout: 120s                   # pending approval expires and is denied
+  wait: 25s                       # one call holds this long for an answer, then returns pending
+  check_every: 15s                # agents are told to pause this long between checks
+  # remind: 1m                    # repeat the tray notification while one waits
   notify: [tray]                  # also: ntfy
   # ntfy:
   #   url: https://ntfy.sh/your-topic

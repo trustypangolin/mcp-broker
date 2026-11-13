@@ -30,7 +30,7 @@ type metaTool struct {
 // metaTools is every tool the broker offers, in one place.
 func (g *Gateway) metaTools() []metaTool {
 	ro := &mcp.ToolAnnotations{ReadOnlyHint: true}
-	approvalID := str("Approval id from a pending_approval result, to retry once approved")
+	approvalID := str("From pending_approval, once approved")
 	return []metaTool{
 		{&mcp.Tool{
 			Name:        "list_connectors",
@@ -74,7 +74,10 @@ func (g *Gateway) metaTools() []metaTool {
 		{&mcp.Tool{
 			Name:        "approval_status",
 			Description: "Check a pending approval.",
-			InputSchema: schema(map[string]any{"approval_id": str("Approval id")}, "approval_id"),
+			InputSchema: schema(map[string]any{
+				"approval_id": map[string]any{"type": "string"},
+				"wait":        map[string]any{"type": "integer", "description": "Seconds to wait"},
+			}, "approval_id"),
 			Annotations: ro,
 		}, g.approvalStatus, groupApprovals},
 		{&mcp.Tool{

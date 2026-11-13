@@ -51,8 +51,8 @@ type Options struct {
 	ToolCache string
 	// Identity extracts the caller from a request. Defaults to IdentityFromRequest.
 	Identity func(*mcp.CallToolRequest) identity.Identity
-	// ApprovalWait is how long call_tool blocks for an out-of-band approval before
-	// returning pending_approval. Defaults to 25s, under typical client tool timeouts.
+	// ApprovalWait, when set, overrides approvals.wait: how long call_tool blocks for an
+	// out-of-band approval before returning pending_approval. Tests use it.
 	ApprovalWait time.Duration
 }
 
@@ -82,9 +82,6 @@ func New(opts Options) *Gateway {
 	}
 	if opts.Identity == nil {
 		opts.Identity = IdentityFromRequest
-	}
-	if opts.ApprovalWait == 0 {
-		opts.ApprovalWait = 25 * time.Second
 	}
 	if opts.Policy == nil {
 		opts.Policy = policy.New(opts.Config)
@@ -567,9 +564,10 @@ func (g *Gateway) unloadConnector(_ context.Context, req *mcp.CallToolRequest) (
 	return textResult(false, "unloaded %s", a.Name), nil
 }
 
-func (g *Gateway) approvalStatus(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (g *Gateway) approvalStatus(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var a struct {
 		ApprovalID string `json:"approval_id"`
+		Wait       int    `json:"wait"`
 	}
 	if err := decodeArgs(req, &a); err != nil {
 		return textResult(true, "%v", err), nil
@@ -579,7 +577,21 @@ func (g *Gateway) approvalStatus(_ context.Context, req *mcp.CallToolRequest) (*
 	if !ok || e.Agent != id.Agent {
 		return textResult(true, "unknown approval id %q", a.ApprovalID), nil
 	}
-	return jsonResult(map[string]any{"approval_id": e.ID, "status": e.Status, "decided_by": e.Channel, "expires": e.Expires}), nil
+	if e.Status == approval.Pending && a.Wait > 0 {
+		// Long-poll, capped at approvals.wait so the call stays inside client timeouts.
+		d := min(time.Duration(a.Wait)*time.Second, g.approvalWait())
+		wctx, cancel := context.WithTimeout(ctx, d)
+		stop := g.keepalive(wctx, req)
+		e, _ = g.opts.Approvals.Wait(wctx, e.ID)
+		stop()
+		cancel()
+	}
+	out := map[string]any{"approval_id": e.ID, "status": e.Status, "decided_by": e.Channel, "expires": e.Expires}
+	if e.Status == approval.Pending {
+		expiresIn, retryAfter := g.pendingTiming(e)
+		out["expires_in_seconds"], out["retry_after_seconds"] = expiresIn, retryAfter
+	}
+	return jsonResult(out), nil
 }
 
 func annotations(t *mcp.Tool) policy.Annotations {
@@ -844,7 +856,7 @@ func (g *Gateway) approveFor(ctx context.Context, req *mcp.CallToolRequest, id i
 		return textResult(true, "denied: %s has no approval channel", id.Agent), "", audit.OutcomeRefused
 	}
 
-	wait := g.opts.ApprovalWait
+	wait := g.approvalWait()
 	if canElicit {
 		wait = g.st().cfg.Approvals.Timeout
 	}
@@ -876,15 +888,47 @@ func (g *Gateway) approveFor(ctx context.Context, req *mcp.CallToolRequest, id i
 	}
 }
 
+// approvalWait is how long one call blocks for an answer from outside the client.
+func (g *Gateway) approvalWait() time.Duration {
+	if g.opts.ApprovalWait > 0 {
+		return g.opts.ApprovalWait
+	}
+	if w := g.st().cfg.Approvals.Wait; w > 0 {
+		return w
+	}
+	return config.DefaultApprovalWait
+}
+
+// checkEvery is how long agents are told to wait between checks on a pending approval.
+func (g *Gateway) checkEvery() time.Duration {
+	if c := g.st().cfg.Approvals.CheckEvery; c > 0 {
+		return c
+	}
+	return config.DefaultCheckEvery
+}
+
+// pendingTiming is what agents are told about when to look again: seconds until the plan
+// expires and until the next check, never past the expiry.
+func (g *Gateway) pendingTiming(e approval.Entry) (expiresIn, retryAfter int) {
+	left := time.Until(e.Expires)
+	expiresIn = max(int(left.Round(time.Second)/time.Second), 0)
+	retryAfter = min(max(int(g.checkEvery()/time.Second), 1), max(expiresIn, 1))
+	return expiresIn, retryAfter
+}
+
 func (g *Gateway) pending(e approval.Entry, retry string) *mcp.CallToolResult {
 	where := "the mcp-broker tray or dashboard"
 	if g.opts.DashboardURL != "" {
 		where += " (" + g.opts.DashboardURL + ")"
 	}
-	res := textResult(false, "pending_approval: approval %s is waiting for the user in %s. It expires at %s. "+
-		"Once approved, %s and approval_id %q.",
-		e.ID, where, e.Expires.Local().Format(time.Kitchen), retry, e.ID)
-	res.StructuredContent = map[string]any{"status": "pending_approval", "approval_id": e.ID, "expires": e.Expires}
+	expiresIn, retryAfter := g.pendingTiming(e)
+	wait := int(g.approvalWait() / time.Second)
+	res := textResult(false, "pending_approval: approval %s is waiting for the user in %s; it expires in %ds (at %s). "+
+		"Tell the user, then don't retry at once: call approval_status with approval_id %q and wait %d, which returns when the user answers; "+
+		"if it is still pending, check again after %ds. Once approved, %s and approval_id %q.",
+		e.ID, where, expiresIn, e.Expires.Local().Format(time.Kitchen), e.ID, wait, retryAfter, retry, e.ID)
+	res.StructuredContent = map[string]any{"status": "pending_approval", "approval_id": e.ID, "expires": e.Expires,
+		"expires_in_seconds": expiresIn, "retry_after_seconds": retryAfter, "wait_seconds": wait}
 	return res
 }
 

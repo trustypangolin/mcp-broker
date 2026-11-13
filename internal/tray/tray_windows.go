@@ -383,9 +383,24 @@ func (a *app) restart() {
 	a.start()
 }
 
+// watchApprovals raises a notification for each new approval the tray may answer and,
+// with approvals.remind set, raises it again that often until it is answered or expires.
 func (a *app) watchApprovals(b *broker.Broker) {
 	ch, cancel := b.Approvals().Subscribe()
 	defer cancel()
+	tick := time.NewTicker(5 * time.Second)
+	defer tick.Stop()
+	shown := map[string]time.Time{} // approval id → last notification
+	raise := func(e approval.Entry, again bool) {
+		id := e.ID
+		head := "Approval needed: " + e.Agent
+		if again {
+			head = "Still waiting: " + e.Agent
+		}
+		left := time.Until(e.Expires).Round(time.Second)
+		a.notify(niifWarning, head, fmt.Sprintf("%s\nExpires in %s. Click to approve or deny.", e.Summary, left), func() { a.decide(b, id) })
+		shown[id] = time.Now()
+	}
 	for {
 		select {
 		case <-b.Err():
@@ -395,11 +410,25 @@ func (a *app) watchApprovals(b *broker.Broker) {
 				return
 			}
 			postMessage(a.hwnd, wmRefresh, 0, 0)
-			if e.Status != approval.Pending || !slices.Contains(e.Channels, config.ChanTray) {
+			if e.Status != approval.Pending {
+				delete(shown, e.ID)
 				continue
 			}
-			id := e.ID
-			a.notify(niifWarning, "Approval needed: "+e.Agent, e.Summary+"\nClick to approve or deny.", func() { a.decide(b, id) })
+			if !slices.Contains(e.Channels, config.ChanTray) {
+				continue
+			}
+			raise(e, false)
+		case <-tick.C:
+			every := b.Config().Approvals.Remind
+			if every <= 0 {
+				continue
+			}
+			for _, e := range trayPending(b) {
+				if last, ok := shown[e.ID]; ok && time.Since(last) >= every && time.Until(e.Expires) > 2*time.Second {
+					raise(e, true)
+					break // one balloon at a time; the next tick shows the others
+				}
+			}
 		}
 	}
 }

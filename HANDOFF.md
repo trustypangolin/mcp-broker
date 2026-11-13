@@ -89,7 +89,7 @@ stdio shim (`mcp-broker connect --agent NAME`) to Streamable HTTP on `:8765/mcp`
 | `identity` | token store (`tokens.yaml`, sha256, hot reload), `Identify` |
 | `procinfo` | Windows: TCP conn → PID, parent chain, `ListenerPID`. Stubs elsewhere |
 | `proc` | owned process trees: job object + toolhelp tree kill (Windows), pgid + Pdeathsig (Unix); `Interrupt` (CTRL_BREAK via helper / SIGTERM), `Adopt`, `KillForeign`, `RunHelper`, `StartDetached` |
-| `approval` | queue: Submit / Decide / Wait / Consume / Subscribe |
+| `approval` | queue: Submit / Decide / Wait / Consume / Subscribe; `SetTimeout` (reload applies `approvals.timeout` live) |
 | `audit` | one JSON line per event; arguments hashed, every string field redacted |
 | `redact` | keeps secret values out of plans, results, logs, audit and the dashboard |
 | `glob` | the one glob syntax (policy, process paths, selectors): `*` crosses `/` and `\`, case-insensitive |
@@ -97,7 +97,7 @@ stdio shim (`mcp-broker connect --agent NAME`) to Streamable HTTP on `:8765/mcp`
 | `gateway` | per-agent MCP servers and meta-tools (`tools.go`), `catalog.go` (tool lists, sizes, `tools-cache.json`), `downstream.go` (clients; remote ones get the OAuth handler), elicitation and progress passthrough, `Reload`, `profiles.go` (profile tools, `gate()` for policy + approval) |
 | `supervisor` | profiles: Plan (pre-flight, bind detection, port owners, `requires_paths`), Start / Stop / Update, health, output ring + rotating log, `runs.json` + adoption |
 | `server` | HTTP front door (identify middleware, Origin refusal), admin API `/admin/*` (bearer = dashboard token; optional `OAuthControl`, `Updater`) |
-| `dashboard` | `/ui`: cookie sessions (one-time login code or pasted admin token), CSRF header `X-Mcpb`, embedded `web/` (plain DOM JS, never innerHTML for agent text); `tree.go` (Tools tree), `import.go`, `aws.go`, `profiles.go`, `settings.go` |
+| `dashboard` | `/ui`: cookie sessions (one-time login code or pasted admin token), CSRF header `X-Mcpb`, embedded `web/` (plain DOM JS, never innerHTML for agent text); `tree.go` (Tools tree), `import.go`, `aws.go`, `profiles.go`, `settings.go`, `roles.go` (Roles page: tick-box connector tree per role → `config.RoleSelectors`, which keeps hand-written selectors and appends `name`/`!name`/`group:G`/`!group:G`; approval timing form) |
 | `awsconfig` | lists AWS shared-config profiles (names, kinds, regions only; never keys or `credential_process`) |
 | `clientcfg` | renders client snippets for `client-config` and the dashboard |
 | `broker` | assembles everything: `Start`, `Reload`, file watcher, `/oauth/callback`, `SignIn`/`SignOut`, `Close` |

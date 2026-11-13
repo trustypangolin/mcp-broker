@@ -87,6 +87,14 @@ func NewQueue(timeout time.Duration) *Queue {
 	return &Queue{timeout: timeout, now: time.Now, entries: map[string]*entry{}, subs: map[chan Entry]struct{}{}}
 }
 
+// SetTimeout changes how long new plans wait for a decision. Plans already pending keep
+// the expiry they were given.
+func (q *Queue) SetTimeout(d time.Duration) {
+	q.mu.Lock()
+	q.timeout = d
+	q.mu.Unlock()
+}
+
 // Submit adds a plan and returns it with ID and times set. A plan with no channels is
 // denied immediately: nobody could ever approve it.
 func (q *Queue) Submit(p Plan) Entry {
@@ -94,8 +102,11 @@ func (q *Queue) Submit(p Plan) Entry {
 	rand.Read(b)
 	now := q.now().UTC()
 	p.ID = "pln_" + hex.EncodeToString(b)
+	q.mu.Lock()
+	timeout := q.timeout
+	q.mu.Unlock()
 	p.Created = now
-	p.Expires = now.Add(q.timeout)
+	p.Expires = now.Add(timeout)
 
 	e := &entry{Entry: Entry{Plan: p, Status: Pending}, done: make(chan struct{})}
 	if len(p.Channels) == 0 {
@@ -110,7 +121,7 @@ func (q *Queue) Submit(p Plan) Entry {
 	q.mu.Unlock()
 
 	if snap.Status == Pending {
-		time.AfterFunc(q.timeout, func() { q.expire(p.ID) })
+		time.AfterFunc(timeout, func() { q.expire(p.ID) })
 	}
 	q.publish(snap)
 	return snap

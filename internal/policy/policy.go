@@ -59,7 +59,7 @@ func (e *Engine) Visible(agent, connector string) bool {
 		return false
 	}
 	_, r := e.Role(agent)
-	return r.Sees(connector, cn.Tags)
+	return r.Sees(connector, cn)
 }
 
 // VisibleConnectors lists the connectors agent may see, sorted.
@@ -78,7 +78,7 @@ func (e *Engine) VisibleConnectors(agent string) []string {
 func (e *Engine) Tool(agent, connector, tool string, ann Annotations) Decision {
 	roleName, role := e.Role(agent)
 	cn, ok := e.cfg.Connectors[connector]
-	if !ok || !role.Sees(connector, cn.Tags) {
+	if !ok || !role.Sees(connector, cn) {
 		return Decision{Action: config.Deny, Reason: fmt.Sprintf("role %s: connector %s not granted", roleName, connector)}
 	}
 

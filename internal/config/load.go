@@ -95,7 +95,14 @@ func (c *Config) applyDefaults() {
 		c.Dashboard.TokenFile = "dashboard.token"
 	}
 	if c.Approvals.Timeout == 0 {
-		c.Approvals.Timeout = 120 * time.Second
+		c.Approvals.Timeout = DefaultApprovalTimeout
+	}
+	if c.Approvals.Wait == 0 {
+		c.Approvals.Wait = DefaultApprovalWait
+	}
+	if c.Approvals.CheckEvery == 0 {
+		// Never past the timeout, so an existing short timeout stays valid.
+		c.Approvals.CheckEvery = min(DefaultCheckEvery, c.Approvals.Timeout)
 	}
 	if c.Audit.Path == "" {
 		c.Audit.Path = "audit.jsonl"

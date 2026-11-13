@@ -418,7 +418,6 @@ func (b *Broker) reloadLocked() (server.Reloaded, error) {
 		"server.tokens_file":   old.Server.TokensFile == cfg.Server.TokensFile,
 		"dashboard.token_file": old.Dashboard.TokenFile == cfg.Dashboard.TokenFile,
 		"audit.path":           old.Audit.Path == cfg.Audit.Path,
-		"approvals.timeout":    old.Approvals.Timeout == cfg.Approvals.Timeout,
 		"approvals.notify":     reflect.DeepEqual(old.Approvals.Notify, cfg.Approvals.Notify),
 	} {
 		if !same {
@@ -427,6 +426,7 @@ func (b *Broker) reloadLocked() (server.Reloaded, error) {
 	}
 	slices.Sort(res.Restart)
 	b.cfg.Store(cfg)
+	b.queue.SetTimeout(cfg.Approvals.Timeout)
 	b.ident.SetConfig(cfg)
 	b.sup.SetConfig(cfg)
 	res.Unloaded = b.gw.Reload(cfg)

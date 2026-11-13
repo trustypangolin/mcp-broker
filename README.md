@@ -61,7 +61,27 @@ every schema. `load_connector` with `detail: "full"` still returns everything at
 
 Approvals pop up as a notification from the tray (click it to approve or deny). Claude Code
 and Claude Desktop can also ask in the app. Pending approvals are on the dashboard's
-Approvals page, which also works from a phone once LAN access is on.
+Approvals page, which also works from a phone once LAN access is on. Each one counts down
+to its expiry, the browser tab's title shows how many are waiting, and **Alert me in this
+browser** adds a system notification that stays until you dismiss it.
+
+**Timing and reminders** on the Approvals page sets, with a timeline of what happens:
+
+| Setting (`approvals:`) | Default | What it does |
+|---|---|---|
+| `timeout` | 120s | How long an approval waits for you; then the call is denied |
+| `wait` | 25s | How long one agent call holds on for your answer before it returns `pending_approval`. Keep it under the agent app's own tool-call timeout |
+| `check_every` | 15s | How long agents are told to pause between checks (`retry_after_seconds`, and `Retry-After` over HTTP), so they don't call again in a loop |
+| `remind` | off | Shows the tray notification again this often while an approval waits |
+
+A pending result tells the agent to call `approval_status` with `wait`, which returns as
+soon as you answer. Changes apply at once, without a restart.
+
+**Roles** on the dashboard shows each role's connectors as a tree under their groups: tick
+connectors, or a whole group, on or off, and set Allow / Ask / Deny for each class of call
+and each profile action. Saving keeps any selectors you wrote by hand (such as
+`!tag:mail`) and adds only the differences; a whole group becomes `group:<name>`, so
+connectors added to it later follow. Agent cards show what each agent sees, by group.
 
 From the tray menu: **Allow LAN and WSL access** (asks for administrator rights once to add
 Private-network and WSL firewall rules, then listens on all interfaces), **Start with

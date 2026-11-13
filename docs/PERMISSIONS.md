@@ -73,9 +73,12 @@ path that cannot resolve an agent.
 
 A role answers three questions:
 
-1. **Which connectors can this agent see?** `connectors:` is a list of names, globs or tags
-   (`tag:office`), with `!` to exclude. Selectors apply in order and the last one that
-   matches decides, so `["*", "!tag:mail"]` is everything except mail. Connectors not granted
+1. **Which connectors can this agent see?** `connectors:` is a list of names, globs, tags
+   (`tag:office`) or groups (`group:AWS`, the dashboard heading a connector is filed under),
+   with `!` to exclude. Tags and groups match ignoring case. Selectors apply in order and the last one that
+   matches decides, so `["*", "!tag:mail"]` is everything except mail. The dashboard's Roles
+   page writes these from tick boxes: it keeps what is there and appends `name`, `!name`,
+   `group:<g>` or `!group:<g>` for what changed. Connectors not granted
    are invisible. They don't
    appear in `list_connectors`, and `load_connector` reports them as unknown, not as forbidden.
 2. **What does each class of tool do?** `classes:` maps each class to an action. Missing
@@ -155,8 +158,14 @@ lists the channels its approvals may use:
 Defaults: `owner` agents use `[elicitation, tray, dashboard]`. Every other agent uses
 `[tray, dashboard]`, so a WSL or container agent can never approve itself.
 
-The first decision wins, the timeout (default 120 s) denies, and an approval covers that one
-call only (no "approve for session" in v0.1).
+The first decision wins, the timeout (`approvals.timeout`, default 120 s) denies, and an
+approval covers that one call only (no "approve for session" in v0.1).
+
+Waiting: a call answered outside the client blocks for `approvals.wait` (default 25 s), then
+returns `pending_approval` with `retry_after_seconds` (`approvals.check_every`, default 15 s)
+and `expires_in_seconds`. `approval_status` takes `wait` (seconds, capped at
+`approvals.wait`) to block until the answer. Elicitation keeps one call open for the whole
+timeout. `approvals.remind` repeats the tray notification while an approval waits.
 
 ## 8. Shared connectors and sessions
 

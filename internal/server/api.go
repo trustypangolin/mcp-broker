@@ -227,6 +227,12 @@ func (g *gate) apiHandler(rt apiRoute) http.Handler {
 		if pendingApproval(res) {
 			status = http.StatusAccepted
 		}
+		if m, ok := res.StructuredContent.(map[string]any); ok {
+			if n, ok := m["retry_after_seconds"].(int); ok {
+				// Standard advice for HTTP clients on when to check a pending approval.
+				w.Header().Set("Retry-After", strconv.Itoa(n))
+			}
+		}
 		apiJSON(w, status, res)
 	})
 }

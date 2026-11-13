@@ -12,8 +12,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
-	"github.com/trustypangolin/mcp-broker/internal/glob"
 	"github.com/trustypangolin/mcp-broker/internal/redact"
 )
 
@@ -45,6 +45,17 @@ func (c *Config) Validate() error {
 	}
 	if c.Server.MaxResultBytes < 0 {
 		add("server.max_result_bytes: must be positive")
+	}
+	ap := c.Approvals
+	switch {
+	case ap.Timeout < time.Second || ap.Timeout > MaxApprovalTimeout:
+		add("approvals.timeout: between 1s and %s", MaxApprovalTimeout)
+	case ap.Wait < time.Second || ap.Wait > MaxApprovalWait:
+		add("approvals.wait: between 1s and %s", MaxApprovalWait)
+	case ap.CheckEvery < time.Second || ap.CheckEvery > ap.Timeout:
+		add("approvals.check_every: between 1s and approvals.timeout")
+	case ap.Remind < 0 || (ap.Remind > 0 && ap.Remind < 10*time.Second):
+		add("approvals.remind: 0 (off) or at least 10s")
 	}
 	for _, n := range c.Approvals.Notify {
 		if n != string(ChanTray) && n != string(ChanNtfy) {
@@ -303,10 +314,13 @@ func (c *Config) Check() []Issue {
 			issue(true, "roles."+name, "no agent uses this role")
 		}
 	}
-	tags := map[string]bool{}
+	tags, groupsInUse := map[string]bool{}, map[string]bool{}
 	for _, cn := range c.Connectors {
 		for _, t := range cn.Tags {
 			tags[strings.ToLower(t)] = true
+		}
+		if cn.Group != "" {
+			groupsInUse[strings.ToLower(cn.Group)] = true
 		}
 	}
 	for _, name := range sortedKeys(c.Roles) {
@@ -314,6 +328,10 @@ func (c *Config) Check() []Issue {
 			s := strings.TrimPrefix(sel, "!")
 			if t, ok := strings.CutPrefix(s, "tag:"); ok && !tags[strings.ToLower(t)] {
 				issue(true, "roles."+name+".connectors", "no connector has %s", s)
+			} else if g, isGroup := strings.CutPrefix(s, "group:"); isGroup {
+				if !groupsInUse[strings.ToLower(g)] {
+					issue(true, "roles."+name+".connectors", "no connector is in group %q", g)
+				}
 			} else if !ok && s != "" && !strings.ContainsAny(s, "*?") {
 				if _, ok := c.Connectors[s]; !ok {
 					issue(true, "roles."+name+".connectors", "unknown connector %q", s)
@@ -350,31 +368,11 @@ func (c *Config) Check() []Issue {
 
 func (c *Config) anyRoleSees(connector string) bool {
 	for _, r := range c.Roles {
-		if r.Sees(connector, c.Connectors[connector].Tags) {
+		if r.Sees(connector, c.Connectors[connector]) {
 			return true
 		}
 	}
 	return false
-}
-
-// Sees reports whether the role grants a connector. Selectors are evaluated in order and the
-// last one that matches decides, so ["*", "!tag:mail"] means everything except mail.
-func (r Role) Sees(connector string, tags []string) bool {
-	seen := false
-	for _, sel := range r.Connectors {
-		neg := strings.HasPrefix(sel, "!")
-		s := strings.TrimPrefix(sel, "!")
-		var hit bool
-		if t, ok := strings.CutPrefix(s, "tag:"); ok {
-			hit = slices.ContainsFunc(tags, func(x string) bool { return strings.EqualFold(x, t) })
-		} else {
-			hit = glob.Match(s, connector)
-		}
-		if hit {
-			seen = !neg
-		}
-	}
-	return seen
 }
 
 func checkCommand(p, command, cwd string, issue func(bool, string, string, ...any)) {

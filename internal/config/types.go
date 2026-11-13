@@ -51,11 +51,32 @@ type Dashboard struct {
 	TokenFile string   `yaml:"token_file"`
 }
 
+// Approvals sets how long people have to answer and how agents wait for them.
 type Approvals struct {
+	// Timeout is how long a pending approval waits for an answer; then it is denied.
 	Timeout time.Duration `yaml:"timeout"`
-	Notify  []string      `yaml:"notify"`
-	Ntfy    Ntfy          `yaml:"ntfy"`
+	// Wait is how long one call blocks for an answer given outside the agent's client
+	// (tray, dashboard) before it returns pending_approval. Keep it under the client's
+	// own tool-call timeout. Default 25s.
+	Wait time.Duration `yaml:"wait"`
+	// CheckEvery is how long agents are told to wait between checks on a pending
+	// approval, so they don't call again in a tight loop. Default 15s.
+	CheckEvery time.Duration `yaml:"check_every"`
+	// Remind repeats the tray notification this often while an approval waits; 0 is
+	// once only.
+	Remind time.Duration `yaml:"remind"`
+	Notify []string      `yaml:"notify"`
+	Ntfy   Ntfy          `yaml:"ntfy"`
 }
+
+// Approval defaults and bounds, shared by Load and the dashboard form.
+const (
+	DefaultApprovalTimeout = 120 * time.Second
+	DefaultApprovalWait    = 25 * time.Second
+	DefaultCheckEvery      = 15 * time.Second
+	MaxApprovalTimeout     = 24 * time.Hour
+	MaxApprovalWait        = 10 * time.Minute
+)
 
 type Ntfy struct {
 	URL string `yaml:"url"`

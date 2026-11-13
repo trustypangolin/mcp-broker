@@ -329,8 +329,15 @@ func (d *Dashboard) listAgents(w http.ResponseWriter, _ *http.Request) {
 		}
 		roles = append(roles, rv)
 	}
+	// Connector → group, so the page can file what each agent sees under its groups.
+	groups := map[string]string{}
+	for n, c := range cfg.Connectors {
+		if c.Group != "" {
+			groups[n] = c.Group
+		}
+	}
 	writeJSON(w, map[string]any{
-		"agents": out, "roles": roles, "classes": config.Classes,
+		"agents": out, "roles": roles, "classes": config.Classes, "connector_groups": groups,
 		"channels": []config.Channel{config.ChanElicitation, config.ChanTray, config.ChanDashboard, config.ChanNtfy},
 	})
 }

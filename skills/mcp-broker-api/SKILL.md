@@ -116,12 +116,14 @@ Denied tools also look like unknown ones. That's deliberate. Don't probe for the
 ## 4. Approvals
 
 Some tools (deletes, sends, spending, anything the user's policy marks) need the user's
-approval. The call waits about 25 seconds for the user to answer in the mcp-broker tray
-or dashboard. If no answer comes in time, you get **HTTP 202**:
+approval. The call waits a while (25 seconds unless the user changed it) for the user to
+answer in the mcp-broker tray or dashboard. If no answer comes in time, you get
+**HTTP 202** with a `Retry-After` header:
 
 ```json
 {"content":[{"type":"text","text":"pending_approval: approval ab12... is waiting for the user ..."}],
- "structuredContent":{"status":"pending_approval","approval_id":"ab12...","expires":"..."}}
+ "structuredContent":{"status":"pending_approval","approval_id":"ab12...","expires":"...",
+   "expires_in_seconds":95,"retry_after_seconds":15,"wait_seconds":25}}
 ```
 
 Then:
@@ -131,7 +133,9 @@ Then:
 2. Wait for the decision. Long-poll rather than retrying in a loop:
    `curl -s -H "$H" "$API/approvals/ab12...?wait=60"`. This returns as soon as the user
    decides, or after `wait` seconds (at most 120), with `structuredContent.status` set to
-   `pending`, `approved`, `denied` or `expired`.
+   `pending`, `approved`, `denied` or `expired`. While it is `pending`, wait
+   `retry_after_seconds` (also the `Retry-After` header) before asking again, and stop
+   once `expires_in_seconds` has run out: the approval is then `expired`.
 3. Once it's `approved`, **repeat the identical call**, with the same connector, tool and
    arguments, and add `"approval_id"`:
 

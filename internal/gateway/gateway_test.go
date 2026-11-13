@@ -310,12 +310,21 @@ func TestPendingApprovalThenRetry(t *testing.T) {
 	if !strings.Contains(out, "pending_approval") {
 		t.Fatalf("retry before decision = %q", out)
 	}
+	if !strings.Contains(out, "approval_status") || !strings.Contains(out, "check again after") {
+		t.Errorf("pending result doesn't say how to wait: %q", out)
+	}
 	status, _ := h.call("approval_status", map[string]any{"approval_id": id})
-	if !strings.Contains(status, `"pending"`) {
+	if !strings.Contains(status, `"pending"`) || !strings.Contains(status, `"retry_after_seconds"`) {
 		t.Errorf("status = %s", status)
 	}
 
-	h.q.Decide(id, true, config.ChanTray)
+	// wait long-polls: it returns as soon as the user answers.
+	go func() { time.Sleep(100 * time.Millisecond); h.q.Decide(id, true, config.ChanTray) }()
+	start := time.Now()
+	status, _ = h.call("approval_status", map[string]any{"approval_id": id, "wait": 5})
+	if !strings.Contains(status, `"approved"`) || time.Since(start) > 3*time.Second {
+		t.Errorf("waited status = %s after %s", status, time.Since(start))
+	}
 
 	// The approval is bound to these exact arguments.
 	other := map[string]any{"connector": "fake", "tool": "delete_thing", "arguments": map[string]any{"text": "c"}, "approval_id": id}
